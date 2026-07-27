@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>마법 도서관</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      min-width: 360px; min-height: 610px; margin: 0; overflow: hidden;
+      font: 13px -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; color: #f4ead6;
+      background-color: #1d1a2a;
+      background-image: var(--stage-background, url("assets/background.png"));
+      background-position: center;
+      background-size: cover;
+      background-repeat: no-repeat;
+      background-attachment: fixed;
+    }
+    body::before { content: ""; position: fixed; inset: 0; pointer-events: none; background: rgba(41, 55, 91, .16); transition: background .6s ease; }
+    body[data-time="afternoon"]::before { background: rgba(125, 83, 43, .18); }
+    body[data-time="sunset"]::before { background: rgba(119, 52, 63, .29); }
+    body[data-time="night"]::before { background: rgba(12, 17, 45, .52); }
+    button { border: 0; border-radius: 7px; color: inherit; background: rgba(47, 40, 68, .88); font: inherit; cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .48; }
+    .hud { position: fixed; z-index: 3; top: 10px; left: 10px; right: 10px; display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 8px; background: rgba(18, 17, 29, .7); backdrop-filter: blur(4px); }
+    .time { min-width: 32px; text-align: center; font-size: 19px; }
+    .resource { min-width: 0; flex: 1; white-space: nowrap; font-size: 11px; opacity: .88; }
+    .resource b { margin-left: 3px; font-size: 14px; font-variant-numeric: tabular-nums; }
+    .scene { position: fixed; z-index: 1; inset: 57px 0 72px; pointer-events: none; }
+    .animal-list { position: absolute; inset: 0; pointer-events: none; }
+    .animal { position: absolute; display: grid; place-items: center; width: 176px; height: 176px; padding: 0; border: 0; background: none; user-select: none; }
+    .animal.legendary .animal-visual { filter: drop-shadow(0 0 7px rgba(224, 190, 105, .7)); }
+    .animal.collected { pointer-events: auto; cursor: grab; touch-action: none; }
+    .animal.dragging { z-index: 2; cursor: grabbing; }
+    .animal-visual { display: grid; place-items: center; width: 160px; height: 160px; }
+    .animal-visual img { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; }
+    .animal-icon { grid-area: 1 / 1; display: block; font-size: 44px; line-height: 1; }
+    .animal > .animal-visual .animal-icon { font-size: 88px; }
+    .animal-icon[hidden], .animal-visual img[hidden] { display: none; }
+    .animal > .animal-visual, .portrait img { transform-origin: center bottom; will-change: transform, opacity; }
+    .animal[data-animal-id="cat"] > .animal-visual { animation: cat-breathe 4.7s ease-in-out infinite; }
+    .animal[data-animal-id="owl"] > .animal-visual { animation: owl-doze 8s ease-in-out infinite; }
+    .animal[data-animal-id="crow"] > .animal-visual { animation: crow-bounce 3.4s ease-in-out infinite; }
+    .animal[data-animal-id="dragon"] > .animal-visual { animation: dragon-aura 5.6s ease-in-out infinite; }
+    .librarian { position: fixed; z-index: 4; bottom: 75px; left: 5px; display: flex; align-items: center; gap: 1px; max-width: calc(100% - 24px); }
+    .portrait { position: relative; flex: 0 0 84px; width: 84px; height: 153px; padding: 0; border-radius: 0; background: transparent; }
+    .portrait img { position: relative; z-index: 1; display: block; width: 100%; height: 100%; object-fit: contain; animation: librarian-breathe 4s ease-in-out infinite; }
+    .librarian-indicator { position: absolute; z-index: 2; top: 22px; right: 3px; width: 14px; height: 14px; border: 2px solid rgba(24, 22, 35, .9); border-radius: 50%; background: #edcb69; box-shadow: 0 0 8px rgba(237, 203, 105, .9); }
+    .bubble { min-width: 0; flex: 1; max-width: calc(100vw - 116px); padding: 8px 9px; border-radius: 8px 8px 8px 2px; background: rgba(14, 13, 21, .82); box-shadow: 0 2px 10px rgba(0, 0, 0, .33); line-height: 1.45; }
+    .bubble p { margin: 0; }
+    .bubble-actions { display: flex; gap: 5px; margin-top: 7px; }
+    .bubble-actions button { flex: 1; padding: 5px; background: #625078; text-align: center; }
+    .bubble-actions .secondary { background: #393342; }
+    .panel { position: fixed; z-index: 5; left: 10px; right: 10px; bottom: 74px; max-height: min(390px, calc(100vh - 150px)); overflow: auto; padding: 11px; border: 1px solid rgba(244, 234, 214, .16); border-radius: 9px; background: rgba(24, 22, 35, .94); box-shadow: 0 8px 25px rgba(0,0,0,.45); }
+    .panel.hidden, .hidden { display: none; }
+    h2 { margin: 0 0 8px; font-size: 13px; }
+    .row { display: flex; justify-content: space-between; gap: 8px; margin: 6px 0; }
+    .muted { color: rgba(244, 234, 214, .65); }
+    .session { line-height: 1.7; }
+    .action-button { width: 100%; padding: 9px; text-align: left; }
+    .action-button-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .action-cost { font-size: 11px; font-weight: 600; opacity: .78; white-space: nowrap; }
+    .stage-cost { max-width: 68%; white-space: normal; text-align: right; }
+    .reason { display: block; margin-top: 2px; font-size: 11px; opacity: .7; }
+    .animal-action-card { margin-top: 8px; padding: 8px; border: 1px solid rgba(255,255,255,.1); border-radius: 7px; }
+    .animal-action-card.legendary { border-color: rgba(224, 190, 105, .48); }
+    .animal-action-head { display: flex; align-items: center; gap: 8px; }
+    .animal-action-head .animal-visual { flex: 0 0 40px; width: 40px; height: 40px; }
+    .animal-action-head .animal-icon { font-size: 29px; }
+    .animal-action-info { min-width: 0; flex: 1; }
+    .animal-effect { margin-top: 2px; font-size: 10px; opacity: .62; }
+    .animal-action-buttons { display: flex; gap: 6px; margin-top: 7px; }
+    .animal-action-buttons button { flex: 1; padding: 7px; text-align: center; }
+    .report-entry { padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,.09); }
+    .report-entry:last-child { border-bottom: 0; }
+    .report-meta { margin-top: 2px; font-size: 10px; opacity: .62; }
+    .proposal { margin-bottom: 8px; padding: 8px; border-radius: 6px; background: rgba(116, 88, 150, .25); }
+    label { display: block; margin-top: 10px; font-size: 11px; opacity: .76; }
+    input { width: 100%; margin-top: 4px; padding: 7px; border: 1px solid #5b4a76; border-radius: 5px; color: inherit; background: #29243a; font: inherit; }
+    input[type="checkbox"] { width: auto; margin: 0 4px 0 0; padding: 0; }
+    .controls { display: flex; gap: 6px; margin-top: 6px; }
+    .controls button { flex: 1; padding: 7px; text-align: center; }
+    .nav { position: fixed; z-index: 6; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; padding: 7px 8px 8px; background: rgba(14, 13, 22, .78); backdrop-filter: blur(5px); }
+    .nav button { min-height: 55px; padding: 4px 2px; background: transparent; font-size: 10px; text-align: center; }
+    .nav button.active { background: rgba(119, 91, 148, .48); }
+    .nav .icon { display: block; margin-bottom: 2px; font-size: 18px; }
+    #toast { position: fixed; z-index: 8; left: 15px; right: 15px; top: 68px; display: none; padding: 8px 10px; border-radius: 6px; background: rgba(62, 50, 82, .94); font-size: 12px; }
+
+    @keyframes librarian-breathe {
+      0%, 100% { transform: translateY(0) scale(1); }
+      50% { transform: translateY(-4px) scale(1.006); }
+    }
+    @keyframes cat-breathe {
+      0%, 100% { transform: translateY(0) scale(1); }
+      50% { transform: translateY(-3px) scale(1.008); }
+    }
+    @keyframes owl-doze {
+      0%, 58%, 100% { transform: translateY(0) rotate(0); }
+      70% { transform: translateY(2px) rotate(2.2deg); }
+      82% { transform: translateY(0) rotate(0); }
+    }
+    @keyframes crow-bounce {
+      0%, 100% { transform: translateY(0) rotate(0); }
+      48% { transform: translateY(-3px) rotate(-.6deg); }
+      58% { transform: translateY(-2px) rotate(.4deg); }
+    }
+    @keyframes dragon-aura {
+      0%, 100% { transform: translateY(0) scale(1); opacity: .88; }
+      50% { transform: translateY(-3px) scale(1.012); opacity: 1; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .portrait img, .animal > .animal-visual { animation: none; }
+    }
+  </style>
+</head>
+<body data-time="day">
+  <header class="hud">
+    <span id="time-icon" class="time" aria-label="시간대">☀</span>
+    <span class="resource">잉크 <b id="ink">0</b></span>
+    <span class="resource">촛불 <b id="candle">0초</b></span>
+    <span class="resource">깃털 <b id="feather">0</b></span>
+  </header>
+
+  <main class="scene" aria-label="방문 중인 동물">
+    <div id="animal-list" class="animal-list"></div>
+  </main>
+
+  <aside class="librarian" aria-label="사서의 판단">
+    <button id="librarian-toggle" class="portrait" type="button" aria-expanded="false" aria-controls="librarian-bubble">
+      <img src="assets/librarian.png" alt="사서" onerror="this.style.display='none'" />
+      <span id="librarian-indicator" class="librarian-indicator hidden" aria-label="새로운 사서의 말"></span>
+    </button>
+    <div id="librarian-bubble" class="bubble hidden">
+      <p id="librarian-reason">사서가 도서관을 살피고 있습니다.</p>
+      <div id="bubble-proposal-actions" class="bubble-actions hidden">
+        <button id="proposal-accept" type="button">수락</button>
+        <button id="proposal-decline" class="secondary" type="button">거절</button>
+      </div>
+    </div>
+  </aside>
+
+  <section id="library-panel" class="panel hidden">
+    <h2>장서</h2>
+    <div class="row"><span>책</span><b id="books">0권</b></div>
+    <button id="craftBook" class="action-button" type="button">
+      <span class="action-button-line"><span>책 만들기</span><span id="craftBook-cost" class="action-cost">잉크 100</span></span>
+      <span class="reason"></span>
+    </button>
+  </section>
+  <section id="shelf-panel" class="panel hidden">
+    <h2>서가</h2>
+    <div class="row"><span>현재 단계</span><b id="stage">1단계 · 작은 서가</b></div>
+    <button id="expandShelf" class="action-button" type="button">
+      <span class="action-button-line">
+        <span id="expandShelf-label">열람실로 확장</span>
+        <span id="expandShelf-cost" class="action-cost stage-cost">책 5권 · 잉크 1000</span>
+      </span>
+      <span class="reason"></span>
+    </button>
+  </section>
+  <section id="catalog-panel" class="panel hidden">
+    <h2>도감</h2>
+    <div id="catalog-list"></div>
+    <div class="row"><span>사서</span><span id="librarian-status" class="muted">비활성</span></div>
+  </section>
+  <section id="animals-panel" class="panel hidden">
+    <h2>동물</h2>
+    <div id="animal-actions"></div>
+  </section>
+  <section id="session-panel" class="panel hidden">
+    <h2>집중 세션</h2>
+    <div class="session">
+      <div>시간 <span id="session-time">0:00</span></div>
+      <div>모은 마법 잉크 <span id="session-ink">0</span></div>
+      <div>모은 촛불 <span id="session-candle">0초</span></div>
+    </div>
+  </section>
+  <section id="report-panel" class="panel hidden">
+    <h2>사서 보고서</h2>
+    <div id="proposal" class="proposal hidden"><div id="proposal-reason"></div></div>
+    <div id="report-list" class="muted">아직 사서의 판단이 없습니다.</div>
+    <label for="directive">사서에게 남길 방침</label>
+    <div id="directive-current" class="muted">방침 없음</div>
+    <input id="directive" type="text" maxlength="500" placeholder="예: 오늘은 조용히 기다려 줘" />
+    <div class="controls"><button id="save-directive" type="button">방침 저장 / 해제</button></div>
+    <label><input id="use-direct-api" type="checkbox" /> 내 OpenAI API 키로 직접 호출</label>
+    <label for="api-key">직접 호출용 OpenAI API 키 (선택)</label>
+    <input id="api-key" type="password" autocomplete="off" placeholder="비워 두면 중계 서버를 사용합니다" />
+    <div class="controls"><button id="save-api-key" type="button">호출 설정 저장</button></div>
+    <div id="api-key-status" class="muted">중계 서버로 연결됨</div>
+  </section>
+
+  <nav class="nav" aria-label="기능 메뉴">
+    <button data-panel="library" type="button"><span class="icon">📚</span>장서</button>
+    <button data-panel="shelf" type="button"><span class="icon">🗄</span>서가</button>
+    <button data-panel="catalog" type="button"><span class="icon">📖</span>도감</button>
+    <button data-panel="animals" type="button"><span class="icon">🐾</span>동물</button>
+    <button data-panel="session" type="button"><span class="icon">⌛</span>집중</button>
+    <button data-panel="report" type="button"><span class="icon">✦</span>보고서</button>
+  </nav>
+  <div id="toast" role="status"></div>
+
+  <script>
+    const timeIcons = { day: '☀', afternoon: '☼', sunset: '◐', night: '☾' }
+    const animalStatusNames = { unknown: '미발견', discovered: '발견', invited: '방문 중', collected: '동반' }
+    const actionNames = { craftBook: '책 제작', expandShelf: '서가 확장', inviteAnimal: '동물 초대', placeAnimal: '동물 배치', notify: '알림', wait: '기다림' }
+    const panels = ['library', 'shelf', 'catalog', 'animals', 'session', 'report']
+    let activePanel = null
+    let lastToastId = null
+    let toastTimer = null
+    let latestLibrarianReason = ''
+    let librarianBubbleOpen = false
+    let librarianMessageInitialized = false
+    let currentLibrarianMessageKey = null
+    let animalCatalogById = {}
+    let latestGameState = null
+    let activeAnimalDrag = null
+    let activeBackgroundStage = null
+    let backgroundRequestId = 0
+    const loadedAnimalImages = new Set()
+    const unavailableAnimalImages = new Set()
+    const stageCostLabels = {
+      books: ['책', '권'],
+      ink: ['잉크', ''],
+      candleSeconds: ['촛불', '초'],
+      feather: ['깃털', ''],
+      trustLevel: ['신뢰', ''],
+    }
+
+    function formatSessionTime (startTime) {
+      const seconds = Math.max(0, Math.floor((Date.now() - startTime) / 1000))
+      return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+    }
+    function formatTime (timestamp) {
+      return new Date(timestamp).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+    }
+    function setLibrarianUnread (unread) {
+      document.getElementById('librarian-indicator').classList.toggle('hidden', !unread)
+    }
+    function setLibrarianBubbleOpen (open) {
+      librarianBubbleOpen = open
+      document.getElementById('librarian-bubble').classList.toggle('hidden', !open)
+      document.getElementById('librarian-toggle').setAttribute('aria-expanded', String(open))
+      if (open) setLibrarianUnread(false)
+    }
+    function formatStageCost (cost) {
+      return Object.entries(cost || {}).map(([resource, amount]) => {
+        const [label, unit] = stageCostLabels[resource] || [resource, '']
+        return `${label} ${amount}${unit}`
+      }).join(' · ')
+    }
+    function updateStageBackground (stageInfo) {
+      const stageNumber = stageInfo.current.stage
+      if (activeBackgroundStage === stageNumber) return
+      activeBackgroundStage = stageNumber
+      const requestId = ++backgroundRequestId
+      const fallback = stageInfo.fallbackBackground
+      const candidate = new Image()
+      candidate.addEventListener('load', () => {
+        if (requestId !== backgroundRequestId) return
+        document.body.style.setProperty('--stage-background', `url("${stageInfo.current.background}")`)
+      })
+      candidate.addEventListener('error', () => {
+        if (requestId !== backgroundRequestId) return
+        document.body.style.setProperty('--stage-background', `url("${fallback}")`)
+      })
+      candidate.src = stageInfo.current.background
+    }
+    function setActionButton (id, availability) {
+      const button = document.getElementById(id)
+      button.disabled = !availability.ok
+      button.title = availability.ok ? '' : availability.reason
+      button.querySelector('.reason').textContent = availability.ok ? '' : availability.reason
+    }
+    function animalStatusText (animal) {
+      const status = animalStatusNames[animal.status] || animal.status
+      return animal.placed ? `${status} · 배치됨` : status
+    }
+    function createAnimalVisual (definition, showImageAlt = true) {
+      const visual = document.createElement('span')
+      visual.className = 'animal-visual'
+      const fallback = document.createElement('span')
+      fallback.className = 'animal-icon'
+      fallback.textContent = definition.emoji
+      fallback.hidden = loadedAnimalImages.has(definition.id)
+
+      if (!unavailableAnimalImages.has(definition.id)) {
+        const image = document.createElement('img')
+        image.src = definition.image
+        image.alt = showImageAlt ? definition.name : ''
+        image.addEventListener('load', () => {
+          loadedAnimalImages.add(definition.id)
+          fallback.hidden = true
+        })
+        image.addEventListener('error', () => {
+          unavailableAnimalImages.add(definition.id)
+          image.hidden = true
+          fallback.hidden = false
+        })
+        visual.appendChild(image)
+      }
+      visual.appendChild(fallback)
+      return visual
+    }
+    function defaultAnimalPosition (index, total) {
+      const itemsPerRow = 2
+      const rowCount = Math.ceil(total / itemsPerRow)
+      const row = Math.floor(index / itemsPerRow)
+      const rowStart = row * itemsPerRow
+      const itemsInRow = Math.min(itemsPerRow, total - rowStart)
+      const column = index - rowStart
+      const x = itemsInRow === 1 ? 0.5 : column / (itemsInRow - 1)
+      const y = rowCount === 1 ? 0.55 : 0.15 + ((row / (rowCount - 1)) * 0.7)
+      return { x, y }
+    }
+    function positionAnimalElement (element, position) {
+      const container = document.getElementById('animal-list')
+      const maxLeft = Math.max(0, container.clientWidth - element.offsetWidth)
+      const maxTop = Math.max(0, container.clientHeight - element.offsetHeight)
+      const x = Math.min(1, Math.max(0, position.x))
+      const y = Math.min(1, Math.max(0, position.y))
+      element.style.left = `${x * maxLeft}px`
+      element.style.top = `${y * maxTop}px`
+    }
+    function beginAnimalDrag (event) {
+      if (event.button !== 0) return
+      const element = event.currentTarget
+      const animalId = element.dataset.animalId
+      if (latestGameState?.animals[animalId]?.status !== 'collected') return
+
+      const container = document.getElementById('animal-list')
+      const elementRect = element.getBoundingClientRect()
+      const maxLeft = Math.max(0, container.clientWidth - element.offsetWidth)
+      const maxTop = Math.max(0, container.clientHeight - element.offsetHeight)
+      activeAnimalDrag = {
+        animalId,
+        element,
+        pointerId: event.pointerId,
+        offsetX: event.clientX - elementRect.left,
+        offsetY: event.clientY - elementRect.top,
+        position: {
+          x: maxLeft ? (parseFloat(element.style.left) || 0) / maxLeft : 0,
+          y: maxTop ? (parseFloat(element.style.top) || 0) / maxTop : 0,
+        },
+      }
+      element.classList.add('dragging')
+      element.setPointerCapture(event.pointerId)
+      event.preventDefault()
+    }
+    function moveAnimalDrag (event) {
+      const drag = activeAnimalDrag
+      if (!drag || drag.element !== event.currentTarget || drag.pointerId !== event.pointerId) return
+      const container = document.getElementById('animal-list')
+      const containerRect = container.getBoundingClientRect()
+      const maxLeft = Math.max(0, container.clientWidth - drag.element.offsetWidth)
+      const maxTop = Math.max(0, container.clientHeight - drag.element.offsetHeight)
+      const left = Math.min(maxLeft, Math.max(0, event.clientX - containerRect.left - drag.offsetX))
+      const top = Math.min(maxTop, Math.max(0, event.clientY - containerRect.top - drag.offsetY))
+      drag.element.style.left = `${left}px`
+      drag.element.style.top = `${top}px`
+      drag.position = {
+        x: maxLeft ? left / maxLeft : 0,
+        y: maxTop ? top / maxTop : 0,
+      }
+      event.preventDefault()
+    }
+    async function finishAnimalDrag (event) {
+      const drag = activeAnimalDrag
+      if (!drag || drag.element !== event.currentTarget || drag.pointerId !== event.pointerId) return
+      activeAnimalDrag = null
+      drag.element.classList.remove('dragging')
+      if (drag.element.hasPointerCapture(event.pointerId)) drag.element.releasePointerCapture(event.pointerId)
+      await window.api.updateAnimalPosition(drag.animalId, drag.position)
+    }
+    function createVisitingAnimalElement (definition) {
+      const element = document.createElement('div')
+      element.dataset.animalId = definition.id
+      element.setAttribute('aria-label', definition.name)
+      element.appendChild(createAnimalVisual(definition, false))
+      element.addEventListener('pointerdown', beginAnimalDrag)
+      element.addEventListener('pointermove', moveAnimalDrag)
+      element.addEventListener('pointerup', finishAnimalDrag)
+      element.addEventListener('pointercancel', finishAnimalDrag)
+      return element
+    }
+    function renderVisitingAnimals (state) {
+      const container = document.getElementById('animal-list')
+      const visibleDefinitions = state.animalCatalog.filter((definition) => {
+        const animal = state.animals[definition.id]
+        if (!animal || animal.status === 'unknown') return false
+        if (animal.status === 'collected') return animal.placed
+        return true
+      })
+      const visibleIds = new Set(visibleDefinitions.map((definition) => definition.id))
+
+      for (const element of container.querySelectorAll('.animal')) {
+        if (!visibleIds.has(element.dataset.animalId)) element.remove()
+      }
+
+      visibleDefinitions.forEach((definition, index) => {
+        const animal = state.animals[definition.id]
+        let element = container.querySelector(`.animal[data-animal-id="${definition.id}"]`)
+        if (!element) {
+          element = createVisitingAnimalElement(definition)
+          container.appendChild(element)
+        }
+        const collected = animal.status === 'collected'
+        const dragging = activeAnimalDrag?.animalId === definition.id
+        element.className = [
+          'animal',
+          definition.type === 'legendary' ? 'legendary' : '',
+          collected ? 'collected' : '',
+          dragging ? 'dragging' : '',
+        ].filter(Boolean).join(' ')
+        if (!dragging) {
+          const position = collected && animal.screenPosition
+            ? animal.screenPosition
+            : defaultAnimalPosition(index, visibleDefinitions.length)
+          positionAnimalElement(element, position)
+        }
+      })
+    }
+    function renderAnimalCatalog (state) {
+      const container = document.getElementById('catalog-list')
+      container.innerHTML = ''
+      for (const definition of state.animalCatalog) {
+        const row = document.createElement('div')
+        row.className = 'row'
+        const name = document.createElement('span')
+        name.textContent = definition.type === 'legendary' ? `✦ ${definition.name}` : definition.name
+        const status = document.createElement('b')
+        status.textContent = animalStatusText(state.animals[definition.id])
+        row.append(name, status)
+        container.appendChild(row)
+      }
+    }
+    function createAnimalActionButton (label, availability, actionName, animalId) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.textContent = label
+      button.disabled = !availability.ok
+      button.title = availability.ok ? '' : availability.reason
+      button.addEventListener('click', () => window.api.performAction(actionName, { animalId }))
+      return button
+    }
+    function renderAnimalActions (state) {
+      const container = document.getElementById('animal-actions')
+      container.innerHTML = ''
+      for (const definition of state.animalCatalog) {
+        const animal = state.animals[definition.id]
+        const card = document.createElement('div')
+        card.className = `animal-action-card${definition.type === 'legendary' ? ' legendary' : ''}`
+        const head = document.createElement('div')
+        head.className = 'animal-action-head'
+        const info = document.createElement('div')
+        info.className = 'animal-action-info'
+        const name = document.createElement('div')
+        name.textContent = `${definition.name} · ${animalStatusText(animal)}`
+        const effect = document.createElement('div')
+        effect.className = 'animal-effect'
+        effect.textContent = definition.placeEffect
+        info.append(name, effect)
+        head.append(createAnimalVisual(definition), info)
+
+        const buttons = document.createElement('div')
+        buttons.className = 'animal-action-buttons'
+        if (definition.type === 'normal') {
+          buttons.appendChild(createAnimalActionButton(
+            `${definition.name} 맞이하기`,
+            state.availability.inviteAnimals[definition.id],
+            'inviteAnimal',
+            definition.id,
+          ))
+        }
+        buttons.appendChild(createAnimalActionButton(
+          animal.placed ? '배치 해제' : '배치',
+          state.availability.placeAnimals[definition.id],
+          'placeAnimal',
+          definition.id,
+        ))
+        card.append(head, buttons)
+        container.appendChild(card)
+      }
+    }
+    function reportActionName (action) {
+      if (action.startsWith('inviteAnimal:')) {
+        const animalId = action.split(':')[1]
+        return `${animalCatalogById[animalId]?.name || animalId} 초대`
+      }
+      return actionNames[action] || action
+    }
+    function showToast (notification) {
+      if (!notification || notification.id === lastToastId) return
+      lastToastId = notification.id
+      const toast = document.getElementById('toast')
+      toast.textContent = notification.message
+      toast.style.display = 'block'
+      clearTimeout(toastTimer)
+      toastTimer = setTimeout(() => { toast.style.display = 'none' }, 1800)
+    }
+    function renderReport (state) {
+      const proposal = state.librarian.pendingProposal
+      document.getElementById('proposal').classList.toggle('hidden', !proposal)
+      if (proposal) document.getElementById('proposal-reason').textContent = proposal.reason
+      const entries = state.librarian.report.slice().reverse()
+      const report = document.getElementById('report-list')
+      report.innerHTML = ''
+      if (!entries.length) {
+        report.textContent = '아직 사서의 판단이 없습니다.'
+        report.className = 'muted'
+        return
+      }
+      report.className = ''
+      for (const entry of entries) {
+        const element = document.createElement('div')
+        element.className = 'report-entry'
+        const title = document.createElement('div')
+        title.textContent = reportActionName(entry.action)
+        const reason = document.createElement('div')
+        reason.textContent = entry.reason
+        const meta = document.createElement('div')
+        meta.className = 'report-meta'
+        meta.textContent = `${formatTime(entry.at)} · ${entry.status}`
+        element.append(title, reason, meta)
+        report.appendChild(element)
+      }
+    }
+    async function openPanel (panelName) {
+      const closingReport = activePanel === 'report' && panelName !== 'report'
+      const isClosing = activePanel === panelName
+      panels.forEach((name) => document.getElementById(`${name}-panel`).classList.add('hidden'))
+      document.querySelectorAll('.nav button').forEach((button) => button.classList.remove('active'))
+      activePanel = isClosing ? null : panelName
+      if (activePanel) {
+        document.getElementById(`${activePanel}-panel`).classList.remove('hidden')
+        document.querySelector(`.nav button[data-panel="${activePanel}"]`).classList.add('active')
+        if (activePanel === 'report') await window.api.markLibrarianReportRead()
+      }
+      if (closingReport || (isClosing && panelName === 'report')) await window.api.clearReadLibrarianReport()
+    }
+    function saveDirective () { return window.api.updateLibrarianDirective(document.getElementById('directive').value) }
+
+    document.getElementById('librarian-toggle').addEventListener('click', () => {
+      setLibrarianBubbleOpen(!librarianBubbleOpen)
+    })
+    document.getElementById('craftBook').addEventListener('click', () => window.api.performAction('craftBook'))
+    document.getElementById('expandShelf').addEventListener('click', () => window.api.performAction('expandShelf'))
+    document.getElementById('proposal-accept').addEventListener('click', () => window.api.respondToLibrarianProposal(true))
+    document.getElementById('proposal-decline').addEventListener('click', () => window.api.respondToLibrarianProposal(false))
+    document.getElementById('directive').addEventListener('input', saveDirective)
+    document.getElementById('save-directive').addEventListener('click', saveDirective)
+    document.getElementById('save-api-key').addEventListener('click', async () => {
+      await window.api.saveLibrarianApiKey(
+        document.getElementById('api-key').value,
+        document.getElementById('use-direct-api').checked,
+      )
+      document.getElementById('api-key').value = ''
+    })
+    document.querySelectorAll('.nav button').forEach((button) => button.addEventListener('click', () => openPanel(button.dataset.panel)))
+    window.addEventListener('resize', () => {
+      if (latestGameState) renderVisitingAnimals(latestGameState)
+    })
+
+    window.api.onGameState((state) => {
+      latestGameState = state
+      animalCatalogById = Object.fromEntries(state.animalCatalog.map((animal) => [animal.id, animal]))
+      document.body.dataset.time = state.timeOfDay
+      document.getElementById('time-icon').textContent = timeIcons[state.timeOfDay]
+      document.getElementById('ink').textContent = state.ink
+      document.getElementById('candle').textContent = `${state.candleSeconds}초`
+      document.getElementById('feather').textContent = state.feather
+      document.getElementById('books').textContent = `${state.books}권`
+      document.getElementById('stage').textContent = `${state.stageInfo.current.stage}단계 · ${state.stageInfo.current.name}`
+      document.getElementById('expandShelf-label').textContent = state.stageInfo.next
+        ? `${state.stageInfo.next.name}(으)로 확장`
+        : '최고 단계'
+      document.getElementById('expandShelf-cost').textContent = state.stageInfo.next
+        ? formatStageCost(state.stageInfo.next.expandCost)
+        : ''
+      updateStageBackground(state.stageInfo)
+      document.getElementById('librarian-status').textContent = state.librarianEnabled
+        ? `${state.librarianPhase}단계 · 수락 ${state.librarian.approvalCount}회 · 신뢰도 ${state.librarian.trustLevel}`
+        : '비활성'
+      document.getElementById('session-time').textContent = formatSessionTime(state.session.sessionStartTime)
+      document.getElementById('session-ink').textContent = state.session.sessionInk
+      document.getElementById('session-candle').textContent = `${state.session.sessionCandle}초`
+      document.getElementById('use-direct-api').checked = state.librarianUsesDirectApi
+      document.getElementById('api-key-status').textContent = state.librarianUsesDirectApi
+        ? '내 API 키로 직접 호출 중입니다.'
+        : '중계 서버로 연결됨'
+      if (document.activeElement !== document.getElementById('directive')) document.getElementById('directive').value = state.librarian.directive
+      document.getElementById('directive-current').textContent = state.librarian.directive || '방침 없음'
+      setActionButton('craftBook', state.availability.craftBook)
+      document.getElementById('craftBook-cost').textContent = `잉크 ${state.availability.craftBook.cost.ink}`
+      setActionButton('expandShelf', state.availability.expandShelf)
+      renderVisitingAnimals(state)
+      renderAnimalCatalog(state)
+      renderAnimalActions(state)
+      const latestEntry = state.librarian.report[state.librarian.report.length - 1]
+      if (latestEntry) latestLibrarianReason = latestEntry.reason
+      const proposal = state.librarian.pendingProposal
+      const librarianMessageKey = proposal
+        ? `proposal:${proposal.at}`
+        : latestEntry
+          ? `report:${latestEntry.at}:${latestEntry.action}:${latestEntry.status}`
+          : null
+      if (!librarianMessageInitialized) {
+        librarianMessageInitialized = true
+        currentLibrarianMessageKey = librarianMessageKey
+        setLibrarianUnread(Boolean(proposal))
+      } else if (librarianMessageKey && librarianMessageKey !== currentLibrarianMessageKey) {
+        currentLibrarianMessageKey = librarianMessageKey
+        if (!librarianBubbleOpen) setLibrarianUnread(true)
+      }
+      document.getElementById('librarian-reason').textContent = proposal?.reason || latestLibrarianReason || '사서가 도서관을 살피고 있습니다.'
+      document.getElementById('bubble-proposal-actions').classList.toggle('hidden', !proposal)
+      renderReport(state)
+      showToast(state.notifications[state.notifications.length - 1])
+    })
+  </script>
+</body>
+</html>

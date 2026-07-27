@@ -1,0 +1,15 @@
+{
+  "name": "magic-library",
+  "version": "0.1.0",
+  "description": "마법도서관에 불이 켜지면 - 1단계: 자원 카운터",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^30.0.0"
+  },
+  "dependencies": {
+    "uiohook-napi": "^1.5.0"
+  }
+}
