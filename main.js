@@ -9,7 +9,7 @@ const {
   inviteCostText,
   grantResource,
 } = require('./game/animals')
-const { publicBookCatalog, bookCostText } = require('./game/books')
+const { BOOK_BY_ID, publicBookCatalog, bookCostText } = require('./game/books')
 const { BUFF_BY_ID, publicShopCatalog } = require('./game/shop')
 const {
   NORMAL_TIMING,
@@ -18,10 +18,30 @@ const {
   cycleElapsedForTimeOfDay,
   applyDemoStatePatch,
 } = require('./game/demo')
+const {
+  normalizeCraftGoal,
+  canUseCraftGoal,
+  planCraftGoal,
+  craftGoalText,
+  clearCompletedCraftGoal,
+} = require('./game/librarian-goal')
 const { stageStateFor, stageCostText } = require('./game/stages')
 const { loadGame, saveGame } = require('./game/save')
 const { loadLibrarianSettings, saveLibrarianSettings } = require('./game/settings')
 const { requestLibrarianDecision } = require('./game/librarian')
+const {
+  TRUST_PROGRESS_PROPOSAL_ACCEPT,
+  TRUST_PROGRESS_CRAFT_BOOK,
+  TRUST_PROGRESS_INVITE_ANIMAL,
+  TRUST_PROGRESS_PROPOSAL_DECLINE,
+  adjustLibrarianApprovalCount,
+  librarianTrustProgress,
+} = require('./game/trust')
+const {
+  craftGoalAllowed,
+  clearDisallowedCraftGoal,
+  safeDirectiveReason,
+} = require('./game/directive')
 
 // 사서 모델 설정은 나중에 한 곳에서만 조정하면 된다.
 const LIBRARIAN_MODEL = 'gpt-5.6-terra'
@@ -126,7 +146,43 @@ function librarianPhase () {
   return gameState.librarian.trustLevel >= LIBRARIAN_TRUST_FOR_PHASE_TWO ? 2 : 1
 }
 
+function librarianGoalMode () {
+  return canUseCraftGoal(gameState.librarian.trustLevel, gameState.librarian.craftGoal)
+}
+
+function currentCraftGoalPlan () {
+  const plan = planCraftGoal(gameState.books, gameState.librarian.craftGoal)
+  if (plan.status !== 'craft') return plan
+
+  const check = actions.craftBook.canExecute(gameState, getTimeOfDay(), plan.tierId)
+  return check.ok
+    ? plan
+    : { ...plan, status: 'blocked', blockReason: check.reason }
+}
+
+function goalModeAvailableActions () {
+  const plan = currentCraftGoalPlan()
+  const available = [{
+    id: 'wait',
+    description: plan.status === 'complete'
+      ? '맡긴 제작 목표가 완료되었음을 보고한다.'
+      : `맡긴 제작 목표를 유지하며 기다린다.${plan.blockReason ? ` ${plan.blockReason}` : ''}`,
+  }]
+
+  if (plan.status === 'craft') {
+    const tier = BOOK_BY_ID[plan.tierId]
+    available.unshift({
+      id: 'craftBook',
+      args: { tierId: plan.tierId },
+      description: `맡긴 목표를 위해 ${tier.name} 1권을 제작한다. ${bookCostText(actions.craftBook.cost(gameState, plan.tierId))}을 소모한다.`,
+    })
+  }
+  return available
+}
+
 function getLibrarianAvailableActions () {
+  if (librarianGoalMode()) return goalModeAvailableActions()
+
   const timeOfDay = getTimeOfDay()
   const available = []
 
@@ -195,7 +251,9 @@ function getLibrarianAvailableActions () {
 }
 
 function librarianActionSignature (action) {
-  return action.args?.animalId ? `${action.id}(${action.args.animalId})` : action.id
+  if (action.args?.animalId) return `${action.id}(${action.args.animalId})`
+  if (action.args?.tierId) return `${action.id}(${action.args.tierId})`
+  return action.id
 }
 
 function trimTimestamps (timestamps, now = Date.now()) {
@@ -222,6 +280,24 @@ function getRhythm () {
 function addNotification (message) {
   notifications.push({ id: `${Date.now()}-${Math.random()}`, message })
   if (notifications.length > MAX_NOTIFICATIONS) notifications = notifications.slice(-MAX_NOTIFICATIONS)
+}
+
+function adjustLibrarianTrustProgress (amount) {
+  const previousTrustLevel = gameState.librarian.trustLevel
+  const changed = adjustLibrarianApprovalCount(gameState.librarian, amount)
+  const goalCleared = clearDisallowedCraftGoal(gameState.librarian)
+  if (changed && gameState.librarian.trustLevel > previousTrustLevel) {
+    addNotification(`사서와의 신뢰가 ${gameState.librarian.trustLevel}단계가 되었습니다.`)
+  }
+  return changed || goalCleared
+}
+
+function recordLibrarianAchievement (actionId) {
+  if (actionId === 'craftBook') {
+    adjustLibrarianTrustProgress(TRUST_PROGRESS_CRAFT_BOOK)
+  } else if (actionId === 'inviteAnimal') {
+    adjustLibrarianTrustProgress(TRUST_PROGRESS_INVITE_ANIMAL)
+  }
 }
 
 function addLibrarianReport (action, reason, status) {
@@ -286,6 +362,7 @@ function sendGameState () {
     animalCatalog: ANIMAL_CATALOG,
     notifications,
     librarianPhase: librarianPhase(),
+    librarianTrustProgress: librarianTrustProgress(gameState.librarian),
     // 중계 서버가 기본 경로이므로 게임 내부 키가 없어도 사서는 활성 상태다.
     librarianEnabled: true,
     librarianUsesDirectApi: librarianSettings.useDirectApi === true && Boolean(librarianSettings.apiKey),
@@ -319,8 +396,24 @@ function runAction (actionName, args = {}) {
 
 function librarianPayload () {
   const stageInfo = stageStateFor(gameState.stage)
+  const allowCraftGoal = craftGoalAllowed(gameState.librarian.trustLevel)
+  const goalMode = allowCraftGoal && librarianGoalMode()
+  const goalPlan = goalMode ? currentCraftGoalPlan() : null
   return {
     directive: gameState.librarian.directive,
+    directivePolicy: { allowCraftGoal },
+    craftGoal: allowCraftGoal ? gameState.librarian.craftGoal : null,
+    goalMode,
+    craftGoalPlan: goalPlan
+      ? {
+          status: goalPlan.status,
+          tierId: goalPlan.tierId || null,
+          required: goalPlan.required || null,
+          blockReason: goalPlan.blockReason || null,
+          willCompleteAfterNextCraft: goalPlan.willCompleteAfterNextCraft === true,
+          goalText: craftGoalText(gameState.librarian.craftGoal),
+        }
+      : null,
     rhythm: getRhythm(),
     library: {
       ink: gameState.ink,
@@ -360,8 +453,108 @@ function recordLibrarianInput (isDelete) {
   lastWorkKeyTime = now
 }
 
+function cleanLibrarianReason (decision) {
+  return typeof decision?.reason === 'string' ? decision.reason.trim().slice(0, 500) : ''
+}
+
+function adoptCraftGoalFromDecision (decision) {
+  if (!craftGoalAllowed(gameState.librarian.trustLevel)) return false
+  const directive = gameState.librarian.directive.trim()
+  if (!directive) return false
+  if (gameState.librarian.craftGoal && gameState.librarian.craftGoalDirective === directive) return false
+  const craftGoal = normalizeCraftGoal(decision?.craftGoal)
+  if (!craftGoal || planCraftGoal(gameState.books, craftGoal).status === 'invalid') return false
+
+  gameState.librarian.craftGoal = craftGoal
+  gameState.librarian.craftGoalDirective = directive
+  saveCurrentGame()
+  return true
+}
+
+function completeCraftGoal (modelReason = '') {
+  const goal = gameState.librarian.craftGoal
+  const summary = craftGoalText(goal)
+  const reason = /마쳤|준비했|준비했습니다/.test(modelReason)
+    ? modelReason
+    : `맡기신 일을 마쳤어요. ${summary}을 준비했습니다.`
+
+  clearCompletedCraftGoal(gameState.librarian)
+  addLibrarianReport('craftGoal', reason, 'completed')
+  addNotification(reason)
+  return reason
+}
+
+function goalProgressReason (modelReason) {
+  return modelReason && !/마쳤/.test(modelReason)
+    ? modelReason
+    : '맡기신 일을 진행하고 있어요.'
+}
+
+function goalWaitingReason (modelReason) {
+  return modelReason && /기다|모이|부족/.test(modelReason)
+    ? modelReason
+    : '맡기신 일을 이어가고 있어요. 재료가 모이길 기다리는 중이에요.'
+}
+
+function executeCraftGoalDecision (decision) {
+  const plan = currentCraftGoalPlan()
+  const modelReason = cleanLibrarianReason(decision)
+
+  if (plan.status === 'invalid') {
+    gameState.librarian.craftGoal = null
+    gameState.librarian.craftGoalDirective = ''
+    saveCurrentGame()
+    return false
+  }
+  if (plan.status === 'complete') {
+    completeCraftGoal(modelReason)
+    saveCurrentGame()
+    return true
+  }
+  if (plan.status === 'blocked') {
+    const reason = goalWaitingReason(modelReason)
+    actions.wait.execute(gameState, getTimeOfDay(), reason)
+    addLibrarianReport('wait', reason, 'waiting')
+    saveCurrentGame()
+    return true
+  }
+
+  // LLM의 행동·등급 선택은 신뢰하지 않고 코드가 계산한 등급을 다시 검증한다.
+  const canExecute = actions.craftBook.canExecute(gameState, getTimeOfDay(), plan.tierId)
+  if (!canExecute.ok) {
+    const reason = goalWaitingReason(modelReason)
+    addLibrarianReport('wait', reason, 'waiting')
+    saveCurrentGame()
+    return true
+  }
+
+  const result = actions.craftBook.execute(gameState, getTimeOfDay(), plan.tierId)
+  if (!result.success) {
+    const reason = goalWaitingReason(modelReason)
+    addLibrarianReport('wait', reason, 'waiting')
+    saveCurrentGame()
+    return true
+  }
+
+  recordLibrarianAchievement('craftBook')
+  applyAutomaticRules()
+  const nextPlan = planCraftGoal(gameState.books, gameState.librarian.craftGoal)
+  if (nextPlan.status === 'complete') {
+    completeCraftGoal(plan.willCompleteAfterNextCraft ? modelReason : '')
+  } else {
+    const reason = goalProgressReason(modelReason)
+    addLibrarianReport(`craftBook:${plan.tierId}`, reason, 'completed')
+    addNotification(reason)
+  }
+  saveCurrentGame()
+  return true
+}
+
 function executeLibrarianDecision (decision) {
   if (!decision || typeof decision !== 'object' || typeof decision.action !== 'string' || typeof decision.reason !== 'string') return
+  adoptCraftGoalFromDecision(decision)
+  if (librarianGoalMode() && executeCraftGoalDecision(decision)) return
+
   const available = getLibrarianAvailableActions()
   const animalId = typeof decision.args?.animalId === 'string' ? decision.args.animalId : null
   const selectedAction = available.find((item) => (
@@ -379,7 +572,12 @@ function executeLibrarianDecision (decision) {
       : action.canExecute(gameState, getTimeOfDay())
   if (!canExecute.ok) return
 
-  const reason = decision.reason.trim().slice(0, 500)
+  const reason = safeDirectiveReason({
+    directive: gameState.librarian.directive,
+    reason: decision.reason.trim().slice(0, 500),
+    actionId: decision.action,
+    trustLevel: gameState.librarian.trustLevel,
+  })
   if (!reason) return
 
   if (decision.action === 'notify') {
@@ -404,6 +602,7 @@ function executeLibrarianDecision (decision) {
         ? action.execute(gameState, getTimeOfDay(), 'basic')
         : action.execute(gameState, getTimeOfDay())
     if (!result.success) return
+    recordLibrarianAchievement(decision.action)
     addLibrarianReport(
       decision.action === 'inviteAnimal' ? `inviteAnimal:${animalId}` : decision.action,
       reason,
@@ -474,7 +673,7 @@ function respondToProposal (accepted) {
   gameState.librarian.pendingProposal = null
 
   if (!accepted) {
-    gameState.librarian.trustLevel = Math.max(0, gameState.librarian.trustLevel - 1)
+    adjustLibrarianTrustProgress(TRUST_PROGRESS_PROPOSAL_DECLINE)
     addLibrarianReport(proposal.action, proposal.reason, 'declined')
     addNotification('사서의 제안을 거절했습니다.')
     saveCurrentGame()
@@ -499,8 +698,7 @@ function respondToProposal (accepted) {
     : action.execute(gameState, getTimeOfDay())
   if (!result.success) return result
   const previousPhase = librarianPhase()
-  gameState.librarian.trustLevel += 1
-  gameState.librarian.approvalCount += 1
+  adjustLibrarianTrustProgress(TRUST_PROGRESS_PROPOSAL_ACCEPT)
   addLibrarianReport(proposal.action, proposal.reason, 'approved')
   addNotification(result.message)
   if (previousPhase === 1 && librarianPhase() === 2) {

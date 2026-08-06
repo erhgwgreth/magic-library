@@ -3,6 +3,12 @@ const { ANIMALS, createAnimalStates } = require('./animals')
 const { createBookInventory, normalizeBookInventory } = require('./books')
 const { createShopState, normalizeShopState } = require('./shop')
 const { STAGE_BY_NUMBER } = require('./stages')
+const { normalizeCraftGoal } = require('./librarian-goal')
+const { clearDisallowedCraftGoal } = require('./directive')
+const {
+  setLibrarianApprovalCount,
+  setLibrarianTrustLevel,
+} = require('./trust')
 
 const DEFAULT_GAME_STATE = {
   ink: 0,
@@ -22,6 +28,8 @@ const DEFAULT_GAME_STATE = {
     trustLevel: 1,
     approvalCount: 0,
     directive: '',
+    craftGoal: null,
+    craftGoalDirective: '',
     pendingProposal: null,
     report: [],
   },
@@ -98,15 +106,21 @@ function applySavedState (saved) {
 
   const librarian = saved.librarian
   if (librarian && typeof librarian === 'object') {
-    state.librarian.trustLevel = Number.isFinite(librarian.trustLevel)
-      ? Math.max(0, librarian.trustLevel)
-      : state.librarian.trustLevel
-    state.librarian.approvalCount = Number.isFinite(librarian.approvalCount)
-      ? Math.max(0, librarian.approvalCount)
-      : 0
+    setLibrarianApprovalCount(state.librarian, librarian.approvalCount)
+    // 예전 세이브가 두 값을 다르게 저장했으면 이미 획득한 신뢰 단계를 우선 보존한다.
+    if (Number.isFinite(librarian.trustLevel)) {
+      setLibrarianTrustLevel(state.librarian, librarian.trustLevel)
+    }
     state.librarian.directive = typeof librarian.directive === 'string'
       ? librarian.directive.slice(0, 500)
       : ''
+    state.librarian.craftGoal = normalizeCraftGoal(librarian.craftGoal)
+    state.librarian.craftGoalDirective = state.librarian.craftGoal && typeof librarian.craftGoalDirective === 'string'
+      ? librarian.craftGoalDirective.slice(0, 500)
+      : state.librarian.craftGoal
+        ? state.librarian.directive
+        : ''
+    clearDisallowedCraftGoal(state.librarian)
     state.librarian.report = copyReport(librarian.report)
 
     const proposal = librarian.pendingProposal

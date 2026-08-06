@@ -1,6 +1,12 @@
 const { BOOK_TIERS } = require('./books')
 const { ANIMALS } = require('./animals')
 const { UPGRADES } = require('./shop')
+const {
+  normalizeApprovalCount,
+  setLibrarianApprovalCount,
+  setLibrarianTrustLevel,
+} = require('./trust')
+const { clearDisallowedCraftGoal } = require('./directive')
 
 const NORMAL_TIMING = Object.freeze({
   cycleMs: 40 * 60 * 1000,
@@ -73,14 +79,14 @@ function applyDemoStatePatch (state, patch) {
 
   const trustLevel = validNonNegativeInteger(patch.librarian?.trustLevel)
   if (trustLevel !== null && trustLevel >= 1 && trustLevel <= 4) {
-    state.librarian.trustLevel = trustLevel
-    changed = true
+    changed = setLibrarianTrustLevel(state.librarian, trustLevel) || changed
+  } else {
+    const approvalCount = normalizeApprovalCount(patch.librarian?.approvalCount)
+    if (approvalCount !== null) {
+      changed = setLibrarianApprovalCount(state.librarian, approvalCount) || changed
+    }
   }
-  const approvalCount = validNonNegativeInteger(patch.librarian?.approvalCount)
-  if (approvalCount !== null) {
-    state.librarian.approvalCount = approvalCount
-    changed = true
-  }
+  changed = clearDisallowedCraftGoal(state.librarian) || changed
 
   for (const animalDefinition of ANIMALS) {
     const status = patch.animals?.[animalDefinition.id]

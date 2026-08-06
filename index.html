@@ -234,7 +234,7 @@
         <label>사서 신뢰 단계
           <select id="demo-trust-level"><option>1</option><option>2</option><option>3</option><option>4</option></select>
         </label>
-        <label>사서 신뢰도 수치<input id="demo-approval-count" type="number" min="0" step="1" /></label>
+        <label>신뢰 진행도<input id="demo-approval-count" type="number" min="0" step="0.25" /></label>
       </div>
 
       <h3>동물 상태</h3>
@@ -251,7 +251,6 @@
         <label>밀랍 심지<input id="demo-upgrade-wax_wick" type="number" min="0" step="1" /></label>
         <label>은빛 깃대<input id="demo-upgrade-silver_quill" type="number" min="0" step="1" /></label>
       </div>
-      <div class="controls"><button id="apply-demo-numbers" type="button">수치 적용</button></div>
 
       <h3>버프 즉시 활성화</h3>
       <div class="demo-actions">
@@ -301,7 +300,7 @@
   <script>
     const timeIcons = { day: '☀', afternoon: '☼', sunset: '◐', night: '☾' }
     const animalStatusNames = { unknown: '미발견', discovered: '발견', invited: '방문 중', collected: '동반' }
-    const actionNames = { craftBook: '책 제작', expandShelf: '서가 확장', inviteAnimal: '동물 초대', placeAnimal: '동물 배치', notify: '알림', wait: '기다림' }
+    const actionNames = { craftBook: '책 제작', craftGoal: '맡긴 제작', expandShelf: '서가 확장', inviteAnimal: '동물 초대', placeAnimal: '동물 배치', notify: '알림', wait: '기다림' }
     const panels = ['library', 'shelf', 'catalog', 'animals', 'shop', 'session', 'report']
     let activePanel = null
     let settingsOpen = false
@@ -317,8 +316,57 @@
     let activeAnimalDrag = null
     let activeBackgroundStage = null
     let backgroundRequestId = 0
+    let demoNumberDraftVersion = 0
+    const demoNumberDrafts = new Map()
     const loadedAnimalImages = new Set()
     const unavailableAnimalImages = new Set()
+    const demoNumberFields = {
+      'demo-ink': {
+        value: (state) => state.ink,
+        patch: (value) => ({ resources: { ink: value } }),
+      },
+      'demo-candle': {
+        value: (state) => state.candleSeconds,
+        patch: (value) => ({ resources: { candleSeconds: value } }),
+      },
+      'demo-feather': {
+        value: (state) => state.feather,
+        patch: (value) => ({ resources: { feather: value } }),
+      },
+      'demo-book-basic': {
+        value: (state) => state.books.basic,
+        patch: (value) => ({ books: { basic: value } }),
+      },
+      'demo-book-intermediate': {
+        value: (state) => state.books.intermediate,
+        patch: (value) => ({ books: { intermediate: value } }),
+      },
+      'demo-book-advanced': {
+        value: (state) => state.books.advanced,
+        patch: (value) => ({ books: { advanced: value } }),
+      },
+      'demo-book-mythic': {
+        value: (state) => state.books.mythic,
+        patch: (value) => ({ books: { mythic: value } }),
+      },
+      'demo-approval-count': {
+        value: (state) => state.librarian.approvalCount,
+        patch: (value) => ({ librarian: { approvalCount: value } }),
+        fractional: true,
+      },
+      'demo-upgrade-infinite_inkwell': {
+        value: (state) => state.shop.upgrades.infinite_inkwell,
+        patch: (value) => ({ upgrades: { infinite_inkwell: value } }),
+      },
+      'demo-upgrade-wax_wick': {
+        value: (state) => state.shop.upgrades.wax_wick,
+        patch: (value) => ({ upgrades: { wax_wick: value } }),
+      },
+      'demo-upgrade-silver_quill': {
+        value: (state) => state.shop.upgrades.silver_quill,
+        patch: (value) => ({ upgrades: { silver_quill: value } }),
+      },
+    }
     const stageCostLabels = {
       ink: ['잉크', ''],
       candleSeconds: ['촛불', ''],
@@ -520,34 +568,35 @@
       const raw = document.getElementById(id).value.trim()
       if (!raw) return null
       const value = Number(raw)
-      return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null
+      if (!Number.isFinite(value) || value < 0) return null
+      return demoNumberFields[id]?.fractional ? value : Math.floor(value)
     }
     function setDemoNumberValue (id, value) {
       const input = document.getElementById(id)
-      if (document.activeElement !== input) input.value = value
+      if (document.activeElement !== input && !demoNumberDrafts.has(id)) input.value = value
     }
-    function demoNumberPatch () {
-      return {
-        resources: {
-          ink: demoNumberValue('demo-ink'),
-          candleSeconds: demoNumberValue('demo-candle'),
-          feather: demoNumberValue('demo-feather'),
-        },
-        books: {
-          basic: demoNumberValue('demo-book-basic'),
-          intermediate: demoNumberValue('demo-book-intermediate'),
-          advanced: demoNumberValue('demo-book-advanced'),
-          mythic: demoNumberValue('demo-book-mythic'),
-        },
-        librarian: {
-          approvalCount: demoNumberValue('demo-approval-count'),
-        },
-        upgrades: {
-          infinite_inkwell: demoNumberValue('demo-upgrade-infinite_inkwell'),
-          wax_wick: demoNumberValue('demo-upgrade-wax_wick'),
-          silver_quill: demoNumberValue('demo-upgrade-silver_quill'),
-        },
+    function restoreDemoNumberValue (id) {
+      const field = demoNumberFields[id]
+      if (!field || !latestGameState) return
+      document.getElementById(id).value = field.value(latestGameState)
+    }
+    async function applyDemoNumberOnBlur (input) {
+      const field = demoNumberFields[input.id]
+      if (!field) return
+      const value = demoNumberValue(input.id)
+      if (value === null) {
+        demoNumberDrafts.delete(input.id)
+        restoreDemoNumberValue(input.id)
+        return
       }
+
+      const version = ++demoNumberDraftVersion
+      demoNumberDrafts.set(input.id, { version, raw: input.value })
+      await window.api.updateDemoState(field.patch(value))
+
+      if (demoNumberDrafts.get(input.id)?.version !== version) return
+      demoNumberDrafts.delete(input.id)
+      if (document.activeElement !== input) restoreDemoNumberValue(input.id)
     }
     function renderDemoSettings (state) {
       document.getElementById('demo-mode').checked = state.demoMode
@@ -786,6 +835,10 @@
       }
     }
     function reportActionName (action) {
+      if (action.startsWith('craftBook:')) {
+        const tierId = action.split(':')[1]
+        return `${bookCatalogById[tierId]?.name || tierId} 제작`
+      }
       if (action.startsWith('inviteAnimal:')) {
         const animalId = action.split(':')[1]
         return `${animalCatalogById[animalId]?.name || animalId} 초대`
@@ -864,7 +917,13 @@
     })
     document.getElementById('settings-toggle').addEventListener('click', () => setSettingsOpen(!settingsOpen))
     document.getElementById('demo-mode').addEventListener('change', (event) => window.api.setDemoMode(event.target.checked))
-    document.getElementById('apply-demo-numbers').addEventListener('click', () => window.api.updateDemoState(demoNumberPatch()))
+    for (const id of Object.keys(demoNumberFields)) {
+      const input = document.getElementById(id)
+      input.addEventListener('input', () => {
+        demoNumberDrafts.set(id, { version: ++demoNumberDraftVersion, raw: input.value })
+      })
+      input.addEventListener('blur', () => { void applyDemoNumberOnBlur(input) })
+    }
     document.getElementById('demo-stage').addEventListener('change', (event) => {
       window.api.updateDemoState({ stage: Number(event.target.value) })
     })
@@ -929,8 +988,12 @@
         ? formatStageCost(state.stageInfo.next.expandCost)
         : ''
       updateStageBackground(state.stageInfo)
+      const trustProgress = state.librarianTrustProgress
+      const trustProgressText = !trustProgress || trustProgress.nextThreshold === null
+        ? '최고 신뢰'
+        : `다음 단계까지 ${Math.ceil((trustProgress.remaining / trustProgress.span) * 100)}% 남음`
       document.getElementById('librarian-status').textContent = state.librarianEnabled
-        ? `${state.librarianPhase}단계 · 수락 ${state.librarian.approvalCount}회 · 신뢰도 ${state.librarian.trustLevel}`
+        ? `사서 ${state.librarianPhase}단계 · 신뢰 ${state.librarian.trustLevel}단계 · ${trustProgressText}`
         : '비활성'
       document.getElementById('session-time').textContent = formatSessionTime(state.session.sessionStartTime)
       document.getElementById('session-ink').textContent = state.session.sessionInk
