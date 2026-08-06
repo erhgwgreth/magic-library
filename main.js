@@ -48,6 +48,7 @@ const LIBRARIAN_MODEL = 'gpt-5.6-terra'
 const LIBRARIAN_REASONING_EFFORT = 'low'
 const LIBRARIAN_TRUST_FOR_PHASE_TWO = 2
 const LIBRARIAN_BACKOFF_MAX_MS = 30 * 60 * 1000
+const LIBRARIAN_BATCH_CRAFT_LIMIT = 500
 const TICK_MS = 1000
 const SAVE_INTERVAL_MS = 30 * 1000
 const GRACE_MS = 5000
@@ -496,6 +497,83 @@ function goalWaitingReason (modelReason) {
     : '맡기신 일을 이어가고 있어요. 재료가 모이길 기다리는 중이에요.'
 }
 
+function craftedBooksText (craftedBooks) {
+  return BOOK_CATALOG
+    .filter((tier) => craftedBooks[tier.id] > 0)
+    .map((tier) => `${tier.name.replace(' 마법장서', '')} 장서 ${craftedBooks[tier.id]}권`)
+    .join(', ')
+}
+
+function craftCostSnapshot (cost) {
+  const snapshot = {}
+  for (const [resource, amount] of Object.entries(cost || {})) {
+    if (resource === 'trustLevel' || !Number.isFinite(amount) || amount <= 0) continue
+    if (resource === 'books') continue
+    snapshot[resource] = gameState[resource]
+  }
+  for (const [tierId, amount] of Object.entries(cost?.books || {})) {
+    if (Number.isFinite(amount) && amount > 0) snapshot[`books:${tierId}`] = gameState.books[tierId]
+  }
+  return snapshot
+}
+
+function craftCostDecreased (snapshot) {
+  return Object.entries(snapshot).some(([resource, before]) => {
+    const after = resource.startsWith('books:')
+      ? gameState.books[resource.slice('books:'.length)]
+      : gameState[resource]
+    return Number.isFinite(before) && Number.isFinite(after) && after < before
+  })
+}
+
+function executeBatchCraftGoal () {
+  const craftedBooks = Object.fromEntries(BOOK_CATALOG.map((tier) => [tier.id, 0]))
+  let stopReason = 'limit'
+
+  for (let count = 0; count < LIBRARIAN_BATCH_CRAFT_LIMIT; count += 1) {
+    const plan = currentCraftGoalPlan()
+    if (plan.status !== 'craft') {
+      stopReason = plan.status
+      break
+    }
+
+    const cost = actions.craftBook.cost(gameState, plan.tierId)
+    const resourceSnapshot = craftCostSnapshot(cost)
+    const result = actions.craftBook.execute(gameState, getTimeOfDay(), plan.tierId)
+    if (!result.success) {
+      stopReason = 'blocked'
+      break
+    }
+
+    craftedBooks[plan.tierId] += 1
+    if (!craftCostDecreased(resourceSnapshot)) {
+      stopReason = 'no-resource-decrease'
+      break
+    }
+
+    recordLibrarianAchievement('craftBook')
+    applyAutomaticRules()
+  }
+
+  const finalPlan = currentCraftGoalPlan()
+  const summary = craftedBooksText(craftedBooks)
+  if (finalPlan.status === 'complete') {
+    const reason = summary
+      ? `맡기신 일을 마쳤어요. ${summary}을 준비했습니다.`
+      : ''
+    completeCraftGoal(reason)
+  } else {
+    const progress = summary ? `방금 ${summary}을 마련했어요. ` : ''
+    const reason = stopReason === 'limit'
+      ? `맡기신 일을 이어가고 있어요. ${progress}한 번에 처리할 수 있는 제작량에 도달해 다음 판단에서 계속하겠습니다.`
+      : `맡기신 일을 이어가고 있어요. ${progress}재료가 더 모이면 계속하겠습니다.`
+    addLibrarianReport(summary ? 'craftGoalBatch' : 'wait', reason, summary ? 'completed' : 'waiting')
+    addNotification(reason)
+  }
+  saveCurrentGame()
+  return true
+}
+
 function executeCraftGoalDecision (decision) {
   const plan = currentCraftGoalPlan()
   const modelReason = cleanLibrarianReason(decision)
@@ -518,6 +596,10 @@ function executeCraftGoalDecision (decision) {
     saveCurrentGame()
     return true
   }
+
+  // 신뢰 4단계만 한 번의 모델 판단 안에서 코드가 목표 제작을 반복한다.
+  // 3단계 이하는 아래의 기존 단일 제작 경로를 그대로 사용한다.
+  if (gameState.librarian.trustLevel >= 4) return executeBatchCraftGoal()
 
   // LLM의 행동·등급 선택은 신뢰하지 않고 코드가 계산한 등급을 다시 검증한다.
   const canExecute = actions.craftBook.canExecute(gameState, getTimeOfDay(), plan.tierId)

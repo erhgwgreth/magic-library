@@ -7,9 +7,13 @@
     "start": "electron ."
   },
   "devDependencies": {
-    "electron": "^30.0.0"
+    "electron": "^30.5.1"
   },
   "dependencies": {
     "uiohook-napi": "^1.5.0"
+  },
+  "allowScripts": {
+    "electron@30.5.1": true,
+    "uiohook-napi@1.5.5": true
   }
 }
