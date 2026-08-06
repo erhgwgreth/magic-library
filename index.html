@@ -26,6 +26,8 @@
     .time { min-width: 32px; text-align: center; font-size: 19px; }
     .resource { min-width: 0; flex: 1; white-space: nowrap; font-size: 11px; opacity: .88; }
     .resource b { margin-left: 3px; font-size: 14px; font-variant-numeric: tabular-nums; }
+    .settings-toggle { flex: 0 0 30px; width: 30px; height: 30px; padding: 0; background: transparent; font-size: 18px; text-align: center; }
+    .settings-toggle.active { background: rgba(119, 91, 148, .48); }
     .scene { position: fixed; z-index: 1; inset: 57px 0 72px; pointer-events: none; }
     .animal-list { position: absolute; inset: 0; pointer-events: none; }
     .animal { position: absolute; display: grid; place-items: center; width: 176px; height: 176px; padding: 0; border: 0; background: none; user-select: none; }
@@ -52,8 +54,10 @@
     .bubble-actions button { flex: 1; padding: 5px; background: #625078; text-align: center; }
     .bubble-actions .secondary { background: #393342; }
     .panel { position: fixed; z-index: 5; left: 10px; right: 10px; bottom: 74px; max-height: min(390px, calc(100vh - 150px)); overflow: auto; padding: 11px; border: 1px solid rgba(244, 234, 214, .16); border-radius: 9px; background: rgba(24, 22, 35, .94); box-shadow: 0 8px 25px rgba(0,0,0,.45); }
+    .settings-panel { top: 57px; bottom: 74px; max-height: none; }
     .panel.hidden, .hidden { display: none; }
     h2 { margin: 0 0 8px; font-size: 13px; }
+    h3 { margin: 12px 0 5px; font-size: 12px; }
     .row { display: flex; justify-content: space-between; gap: 8px; margin: 6px 0; }
     .muted { color: rgba(244, 234, 214, .65); }
     .session { line-height: 1.7; }
@@ -62,6 +66,9 @@
     .action-cost { font-size: 11px; font-weight: 600; opacity: .78; white-space: nowrap; }
     .stage-cost { max-width: 68%; white-space: normal; text-align: right; }
     .reason { display: block; margin-top: 2px; font-size: 11px; opacity: .7; }
+    .book-entry + .book-entry { margin-top: 10px; }
+    .shop-item { margin-top: 7px; }
+    .shop-state { margin: 2px 0 4px; font-size: 11px; opacity: .7; }
     .animal-action-card { margin-top: 8px; padding: 8px; border: 1px solid rgba(255,255,255,.1); border-radius: 7px; }
     .animal-action-card.legendary { border-color: rgba(224, 190, 105, .48); }
     .animal-action-head { display: flex; align-items: center; gap: 8px; }
@@ -80,7 +87,16 @@
     input[type="checkbox"] { width: auto; margin: 0 4px 0 0; padding: 0; }
     .controls { display: flex; gap: 6px; margin-top: 6px; }
     .controls button { flex: 1; padding: 7px; text-align: center; }
-    .nav { position: fixed; z-index: 6; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; padding: 7px 8px 8px; background: rgba(14, 13, 22, .78); backdrop-filter: blur(5px); }
+    details { margin-top: 12px; }
+    summary { cursor: pointer; font-size: 11px; opacity: .78; }
+    select { width: 100%; margin-top: 4px; padding: 7px; border: 1px solid #5b4a76; border-radius: 5px; color: inherit; background: #29243a; font: inherit; }
+    .demo-panel { margin-top: 8px; padding-top: 2px; border-top: 1px solid rgba(255,255,255,.09); }
+    .demo-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 8px; }
+    .demo-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 6px; }
+    .demo-actions button { padding: 7px; text-align: center; }
+    .reset-confirm { margin-top: 7px; padding: 8px; border-radius: 6px; background: rgba(133, 60, 60, .24); }
+    .reset-confirm p { margin: 0 0 7px; }
+    .nav { position: fixed; z-index: 6; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; padding: 7px 8px 8px; background: rgba(14, 13, 22, .78); backdrop-filter: blur(5px); }
     .nav button { min-height: 55px; padding: 4px 2px; background: transparent; font-size: 10px; text-align: center; }
     .nav button.active { background: rgba(119, 91, 148, .48); }
     .nav .icon { display: block; margin-bottom: 2px; font-size: 18px; }
@@ -117,8 +133,9 @@
   <header class="hud">
     <span id="time-icon" class="time" aria-label="시간대">☀</span>
     <span class="resource">잉크 <b id="ink">0</b></span>
-    <span class="resource">촛불 <b id="candle">0초</b></span>
+    <span class="resource">촛불 <b id="candle">0</b></span>
     <span class="resource">깃털 <b id="feather">0</b></span>
+    <button id="settings-toggle" class="settings-toggle" type="button" aria-label="설정 열기" aria-expanded="false" aria-controls="settings-panel">⚙</button>
   </header>
 
   <main class="scene" aria-label="방문 중인 동물">
@@ -141,11 +158,7 @@
 
   <section id="library-panel" class="panel hidden">
     <h2>장서</h2>
-    <div class="row"><span>책</span><b id="books">0권</b></div>
-    <button id="craftBook" class="action-button" type="button">
-      <span class="action-button-line"><span>책 만들기</span><span id="craftBook-cost" class="action-cost">잉크 100</span></span>
-      <span class="reason"></span>
-    </button>
+    <div id="book-list"></div>
   </section>
   <section id="shelf-panel" class="panel hidden">
     <h2>서가</h2>
@@ -153,7 +166,7 @@
     <button id="expandShelf" class="action-button" type="button">
       <span class="action-button-line">
         <span id="expandShelf-label">열람실로 확장</span>
-        <span id="expandShelf-cost" class="action-cost stage-cost">책 5권 · 잉크 1000</span>
+        <span id="expandShelf-cost" class="action-cost stage-cost">기초 마법장서 5권 · 잉크 1000</span>
       </span>
       <span class="reason"></span>
     </button>
@@ -167,12 +180,21 @@
     <h2>동물</h2>
     <div id="animal-actions"></div>
   </section>
+  <section id="shop-panel" class="panel hidden">
+    <h2>상점</h2>
+    <h3>연금술</h3>
+    <div id="shop-alchemy"></div>
+    <h3>버프</h3>
+    <div id="shop-buffs"></div>
+    <h3>강화</h3>
+    <div id="shop-upgrades"></div>
+  </section>
   <section id="session-panel" class="panel hidden">
     <h2>집중 세션</h2>
     <div class="session">
       <div>시간 <span id="session-time">0:00</span></div>
       <div>모은 마법 잉크 <span id="session-ink">0</span></div>
-      <div>모은 촛불 <span id="session-candle">0초</span></div>
+      <div>모은 촛불 <span id="session-candle">0</span></div>
     </div>
   </section>
   <section id="report-panel" class="panel hidden">
@@ -183,11 +205,86 @@
     <div id="directive-current" class="muted">방침 없음</div>
     <input id="directive" type="text" maxlength="500" placeholder="예: 오늘은 조용히 기다려 줘" />
     <div class="controls"><button id="save-directive" type="button">방침 저장 / 해제</button></div>
-    <label><input id="use-direct-api" type="checkbox" /> 내 OpenAI API 키로 직접 호출</label>
-    <label for="api-key">직접 호출용 OpenAI API 키 (선택)</label>
-    <input id="api-key" type="password" autocomplete="off" placeholder="비워 두면 중계 서버를 사용합니다" />
-    <div class="controls"><button id="save-api-key" type="button">호출 설정 저장</button></div>
+  </section>
+
+  <section id="settings-panel" class="panel settings-panel hidden" aria-label="설정">
+    <h2>설정</h2>
+    <label><input id="demo-mode" type="checkbox" /> 데모 모드</label>
+    <div id="demo-controls" class="demo-panel hidden">
+      <h3>자원</h3>
+      <div class="demo-grid">
+        <label>마법 잉크<input id="demo-ink" type="number" min="0" step="1" /></label>
+        <label>고요한 촛불<input id="demo-candle" type="number" min="0" step="1" /></label>
+        <label>교정 깃털<input id="demo-feather" type="number" min="0" step="1" /></label>
+      </div>
+
+      <h3>장서</h3>
+      <div class="demo-grid">
+        <label>기초 마법장서<input id="demo-book-basic" type="number" min="0" step="1" /></label>
+        <label>중급 마법장서<input id="demo-book-intermediate" type="number" min="0" step="1" /></label>
+        <label>고급 마법장서<input id="demo-book-advanced" type="number" min="0" step="1" /></label>
+        <label>신화급 마법장서<input id="demo-book-mythic" type="number" min="0" step="1" /></label>
+      </div>
+
+      <h3>성장</h3>
+      <div class="demo-grid">
+        <label>서가 단계
+          <select id="demo-stage"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
+        </label>
+        <label>사서 신뢰 단계
+          <select id="demo-trust-level"><option>1</option><option>2</option><option>3</option><option>4</option></select>
+        </label>
+        <label>사서 신뢰도 수치<input id="demo-approval-count" type="number" min="0" step="1" /></label>
+      </div>
+
+      <h3>동물 상태</h3>
+      <div class="demo-grid">
+        <label>책 읽는 고양이<select id="demo-animal-cat"><option>unknown</option><option>discovered</option><option>invited</option><option>collected</option></select></label>
+        <label>졸린 부엉이<select id="demo-animal-owl"><option>unknown</option><option>discovered</option><option>invited</option><option>collected</option></select></label>
+        <label>오타 까마귀<select id="demo-animal-crow"><option>unknown</option><option>discovered</option><option>invited</option><option>collected</option></select></label>
+        <label>장서룡<select id="demo-animal-dragon"><option>unknown</option><option>discovered</option><option>invited</option><option>collected</option></select></label>
+      </div>
+
+      <h3>강화</h3>
+      <div class="demo-grid">
+        <label>무한 잉크병<input id="demo-upgrade-infinite_inkwell" type="number" min="0" step="1" /></label>
+        <label>밀랍 심지<input id="demo-upgrade-wax_wick" type="number" min="0" step="1" /></label>
+        <label>은빛 깃대<input id="demo-upgrade-silver_quill" type="number" min="0" step="1" /></label>
+      </div>
+      <div class="controls"><button id="apply-demo-numbers" type="button">수치 적용</button></div>
+
+      <h3>버프 즉시 활성화</h3>
+      <div class="demo-actions">
+        <button type="button" data-demo-buff="focus_flame">집중의 불꽃</button>
+        <button type="button" data-demo-buff="midnight_candle">밤샘의 초</button>
+        <button type="button" data-demo-buff="proof_seal">교정의 인장</button>
+        <button type="button" data-demo-buff="inspiration_wave">영감의 물결</button>
+      </div>
+
+      <h3>시간대</h3>
+      <select id="demo-time-of-day">
+        <option value="day">낮</option><option value="afternoon">오후</option><option value="sunset">노을</option><option value="night">밤</option>
+      </select>
+
+      <h3>세이브 초기화</h3>
+      <div class="controls"><button id="request-demo-reset" type="button">초기화</button></div>
+      <div id="demo-reset-confirm" class="reset-confirm hidden">
+        <p>확인 버튼을 누르시면 세이브 내용이 초기화됩니다.</p>
+        <div class="controls">
+          <button id="confirm-demo-reset" type="button">확인</button>
+          <button id="cancel-demo-reset" class="secondary" type="button">취소</button>
+        </div>
+      </div>
+    </div>
+
     <div id="api-key-status" class="muted">중계 서버로 연결됨</div>
+    <details>
+      <summary>직접 API 호출 설정 (선택)</summary>
+      <label><input id="use-direct-api" type="checkbox" /> 내 OpenAI API 키로 직접 호출</label>
+      <label for="api-key">직접 호출용 OpenAI API 키</label>
+      <input id="api-key" type="password" autocomplete="off" placeholder="비워 두면 중계 서버를 사용합니다" />
+      <div class="controls"><button id="save-api-key" type="button">호출 설정 저장</button></div>
+    </details>
   </section>
 
   <nav class="nav" aria-label="기능 메뉴">
@@ -195,6 +292,7 @@
     <button data-panel="shelf" type="button"><span class="icon">🗄</span>서가</button>
     <button data-panel="catalog" type="button"><span class="icon">📖</span>도감</button>
     <button data-panel="animals" type="button"><span class="icon">🐾</span>동물</button>
+    <button data-panel="shop" type="button"><span class="icon">⚗</span>상점</button>
     <button data-panel="session" type="button"><span class="icon">⌛</span>집중</button>
     <button data-panel="report" type="button"><span class="icon">✦</span>보고서</button>
   </nav>
@@ -204,14 +302,16 @@
     const timeIcons = { day: '☀', afternoon: '☼', sunset: '◐', night: '☾' }
     const animalStatusNames = { unknown: '미발견', discovered: '발견', invited: '방문 중', collected: '동반' }
     const actionNames = { craftBook: '책 제작', expandShelf: '서가 확장', inviteAnimal: '동물 초대', placeAnimal: '동물 배치', notify: '알림', wait: '기다림' }
-    const panels = ['library', 'shelf', 'catalog', 'animals', 'session', 'report']
+    const panels = ['library', 'shelf', 'catalog', 'animals', 'shop', 'session', 'report']
     let activePanel = null
+    let settingsOpen = false
     let lastToastId = null
     let toastTimer = null
     let latestLibrarianReason = ''
     let librarianBubbleOpen = false
     let librarianMessageInitialized = false
     let currentLibrarianMessageKey = null
+    let bookCatalogById = {}
     let animalCatalogById = {}
     let latestGameState = null
     let activeAnimalDrag = null
@@ -220,9 +320,8 @@
     const loadedAnimalImages = new Set()
     const unavailableAnimalImages = new Set()
     const stageCostLabels = {
-      books: ['책', '권'],
       ink: ['잉크', ''],
-      candleSeconds: ['촛불', '초'],
+      candleSeconds: ['촛불', ''],
       feather: ['깃털', ''],
       trustLevel: ['신뢰', ''],
     }
@@ -244,10 +343,18 @@
       if (open) setLibrarianUnread(false)
     }
     function formatStageCost (cost) {
-      return Object.entries(cost || {}).map(([resource, amount]) => {
+      const parts = []
+      for (const [resource, amount] of Object.entries(cost || {})) {
+        if (resource === 'books') {
+          for (const [bookId, bookAmount] of Object.entries(amount || {})) {
+            parts.push(`${bookCatalogById[bookId]?.name || bookId} ${bookAmount}권`)
+          }
+          continue
+        }
         const [label, unit] = stageCostLabels[resource] || [resource, '']
-        return `${label} ${amount}${unit}`
-      }).join(' · ')
+        parts.push(`${label} ${amount}${unit}`)
+      }
+      return parts.join(' · ')
     }
     function updateStageBackground (stageInfo) {
       const stageNumber = stageInfo.current.stage
@@ -271,6 +378,202 @@
       button.disabled = !availability.ok
       button.title = availability.ok ? '' : availability.reason
       button.querySelector('.reason').textContent = availability.ok ? '' : availability.reason
+    }
+    function renderBookPanel (state) {
+      const container = document.getElementById('book-list')
+      container.innerHTML = ''
+      for (const tier of state.bookCatalog) {
+        const availability = state.availability.craftBooks[tier.id]
+        const entry = document.createElement('div')
+        entry.className = 'book-entry'
+
+        const countRow = document.createElement('div')
+        countRow.className = 'row'
+        const name = document.createElement('span')
+        name.textContent = tier.name
+        const count = document.createElement('b')
+        count.textContent = `${state.books[tier.id]}권`
+        countRow.append(name, count)
+
+        const button = document.createElement('button')
+        button.className = 'action-button'
+        button.type = 'button'
+        button.disabled = !availability.ok
+        button.title = availability.ok ? '' : availability.reason
+        button.addEventListener('click', () => window.api.performAction('craftBook', { tierId: tier.id }))
+
+        const line = document.createElement('span')
+        line.className = 'action-button-line'
+        const label = document.createElement('span')
+        label.textContent = `${tier.name} 만들기`
+        const cost = document.createElement('span')
+        cost.className = 'action-cost stage-cost'
+        cost.textContent = formatStageCost(availability.cost)
+        line.append(label, cost)
+
+        const reason = document.createElement('span')
+        reason.className = 'reason'
+        reason.textContent = availability.ok ? '' : availability.reason
+        button.append(line, reason)
+        entry.append(countRow, button)
+        container.appendChild(entry)
+      }
+    }
+    function formatRemainingTime (remainingMs) {
+      const seconds = Math.max(0, Math.ceil(remainingMs / 1000))
+      return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+    }
+    function createShopButton (labelText, detailText, availability, actionName, itemId) {
+      const button = document.createElement('button')
+      button.className = 'action-button'
+      button.type = 'button'
+      button.disabled = !availability.ok
+      button.title = availability.ok ? '' : availability.reason
+      button.addEventListener('click', () => window.api.performAction(actionName, { itemId }))
+
+      const line = document.createElement('span')
+      line.className = 'action-button-line'
+      const label = document.createElement('span')
+      label.textContent = labelText
+      const detail = document.createElement('span')
+      detail.className = 'action-cost stage-cost'
+      detail.textContent = detailText
+      line.append(label, detail)
+
+      const reason = document.createElement('span')
+      reason.className = 'reason'
+      reason.textContent = availability.ok ? '' : availability.reason
+      button.append(line, reason)
+      return button
+    }
+    function renderShop (state) {
+      const alchemyContainer = document.getElementById('shop-alchemy')
+      const buffContainer = document.getElementById('shop-buffs')
+      const upgradeContainer = document.getElementById('shop-upgrades')
+      alchemyContainer.innerHTML = ''
+      buffContainer.innerHTML = ''
+      upgradeContainer.innerHTML = ''
+
+      for (const item of state.shopCatalog.alchemy) {
+        const wrapper = document.createElement('div')
+        wrapper.className = 'shop-item'
+        wrapper.appendChild(createShopButton(
+          item.name,
+          `${formatStageCost(item.from)} → ${formatStageCost(item.to)}`,
+          state.availability.shop.alchemy[item.id],
+          'buyAlchemy',
+          item.id,
+        ))
+        alchemyContainer.appendChild(wrapper)
+      }
+
+      for (const item of state.shopCatalog.buffs) {
+        const wrapper = document.createElement('div')
+        wrapper.className = 'shop-item'
+        const resourceName = item.effect.resource === 'all'
+          ? '모든 자원'
+          : (stageCostLabels[item.effect.resource]?.[0] || item.effect.resource)
+        const remainingMs = (state.shop.buffs[item.id] || 0) - Date.now()
+        const status = document.createElement('div')
+        status.className = 'shop-state'
+        const durationMs = state.effectiveBuffDurationMs || item.durationMs
+        const durationText = durationMs < 60000
+          ? `${Math.round(durationMs / 1000)}초`
+          : `${Math.round(durationMs / 60000)}분`
+        status.textContent = `${resourceName} ×${item.effect.multiplier} · ${durationText}${remainingMs > 0 ? ` · 남음 ${formatRemainingTime(remainingMs)}` : ''}`
+        wrapper.append(
+          status,
+          createShopButton(
+            item.name,
+            formatStageCost(item.cost),
+            state.availability.shop.buffs[item.id],
+            'buyBuff',
+            item.id,
+          ),
+        )
+        buffContainer.appendChild(wrapper)
+      }
+
+      for (const item of state.shopCatalog.upgrades) {
+        const wrapper = document.createElement('div')
+        wrapper.className = 'shop-item'
+        const level = state.shop.upgrades[item.id]
+        const resourceName = stageCostLabels[item.resource]?.[0] || item.resource
+        const status = document.createElement('div')
+        status.className = 'shop-state'
+        status.textContent = `${level}레벨 · ${resourceName} +${level * item.effectPerLevel}%`
+        const availability = state.availability.shop.upgrades[item.id]
+        wrapper.append(
+          status,
+          createShopButton(
+            `${item.name} 강화`,
+            formatStageCost(availability.cost),
+            availability,
+            'buyUpgrade',
+            item.id,
+          ),
+        )
+        upgradeContainer.appendChild(wrapper)
+      }
+    }
+    function demoNumberValue (id) {
+      const raw = document.getElementById(id).value.trim()
+      if (!raw) return null
+      const value = Number(raw)
+      return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null
+    }
+    function setDemoNumberValue (id, value) {
+      const input = document.getElementById(id)
+      if (document.activeElement !== input) input.value = value
+    }
+    function demoNumberPatch () {
+      return {
+        resources: {
+          ink: demoNumberValue('demo-ink'),
+          candleSeconds: demoNumberValue('demo-candle'),
+          feather: demoNumberValue('demo-feather'),
+        },
+        books: {
+          basic: demoNumberValue('demo-book-basic'),
+          intermediate: demoNumberValue('demo-book-intermediate'),
+          advanced: demoNumberValue('demo-book-advanced'),
+          mythic: demoNumberValue('demo-book-mythic'),
+        },
+        librarian: {
+          approvalCount: demoNumberValue('demo-approval-count'),
+        },
+        upgrades: {
+          infinite_inkwell: demoNumberValue('demo-upgrade-infinite_inkwell'),
+          wax_wick: demoNumberValue('demo-upgrade-wax_wick'),
+          silver_quill: demoNumberValue('demo-upgrade-silver_quill'),
+        },
+      }
+    }
+    function renderDemoSettings (state) {
+      document.getElementById('demo-mode').checked = state.demoMode
+      document.getElementById('demo-controls').classList.toggle('hidden', !state.demoMode)
+      if (!state.demoMode) {
+        document.getElementById('demo-reset-confirm').classList.add('hidden')
+        return
+      }
+
+      setDemoNumberValue('demo-ink', state.ink)
+      setDemoNumberValue('demo-candle', state.candleSeconds)
+      setDemoNumberValue('demo-feather', state.feather)
+      setDemoNumberValue('demo-book-basic', state.books.basic)
+      setDemoNumberValue('demo-book-intermediate', state.books.intermediate)
+      setDemoNumberValue('demo-book-advanced', state.books.advanced)
+      setDemoNumberValue('demo-book-mythic', state.books.mythic)
+      setDemoNumberValue('demo-approval-count', state.librarian.approvalCount)
+      setDemoNumberValue('demo-upgrade-infinite_inkwell', state.shop.upgrades.infinite_inkwell)
+      setDemoNumberValue('demo-upgrade-wax_wick', state.shop.upgrades.wax_wick)
+      setDemoNumberValue('demo-upgrade-silver_quill', state.shop.upgrades.silver_quill)
+      document.getElementById('demo-stage').value = String(state.stage)
+      document.getElementById('demo-trust-level').value = String(state.librarian.trustLevel)
+      document.getElementById('demo-time-of-day').value = state.timeOfDay
+      for (const animalId of ['cat', 'owl', 'crow', 'dragon']) {
+        document.getElementById(`demo-animal-${animalId}`).value = state.animals[animalId].status
+      }
     }
     function animalStatusText (animal) {
       const status = animalStatusNames[animal.status] || animal.status
@@ -528,6 +831,7 @@
     async function openPanel (panelName) {
       const closingReport = activePanel === 'report' && panelName !== 'report'
       const isClosing = activePanel === panelName
+      if (settingsOpen) setSettingsOpen(false)
       panels.forEach((name) => document.getElementById(`${name}-panel`).classList.add('hidden'))
       document.querySelectorAll('.nav button').forEach((button) => button.classList.remove('active'))
       activePanel = isClosing ? null : panelName
@@ -538,12 +842,56 @@
       }
       if (closingReport || (isClosing && panelName === 'report')) await window.api.clearReadLibrarianReport()
     }
+    function setSettingsOpen (open) {
+      settingsOpen = open
+      const panel = document.getElementById('settings-panel')
+      const toggle = document.getElementById('settings-toggle')
+      panel.classList.toggle('hidden', !open)
+      toggle.classList.toggle('active', open)
+      toggle.setAttribute('aria-expanded', String(open))
+      toggle.setAttribute('aria-label', open ? '설정 닫기' : '설정 열기')
+      if (open && activePanel) {
+        if (activePanel === 'report') void window.api.clearReadLibrarianReport()
+        document.getElementById(`${activePanel}-panel`).classList.add('hidden')
+        document.querySelectorAll('.nav button').forEach((button) => button.classList.remove('active'))
+        activePanel = null
+      }
+    }
     function saveDirective () { return window.api.updateLibrarianDirective(document.getElementById('directive').value) }
 
     document.getElementById('librarian-toggle').addEventListener('click', () => {
       setLibrarianBubbleOpen(!librarianBubbleOpen)
     })
-    document.getElementById('craftBook').addEventListener('click', () => window.api.performAction('craftBook'))
+    document.getElementById('settings-toggle').addEventListener('click', () => setSettingsOpen(!settingsOpen))
+    document.getElementById('demo-mode').addEventListener('change', (event) => window.api.setDemoMode(event.target.checked))
+    document.getElementById('apply-demo-numbers').addEventListener('click', () => window.api.updateDemoState(demoNumberPatch()))
+    document.getElementById('demo-stage').addEventListener('change', (event) => {
+      window.api.updateDemoState({ stage: Number(event.target.value) })
+    })
+    document.getElementById('demo-trust-level').addEventListener('change', (event) => {
+      window.api.updateDemoState({ librarian: { trustLevel: Number(event.target.value) } })
+    })
+    for (const animalId of ['cat', 'owl', 'crow', 'dragon']) {
+      document.getElementById(`demo-animal-${animalId}`).addEventListener('change', (event) => {
+        window.api.updateDemoState({ animals: { [animalId]: event.target.value } })
+      })
+    }
+    document.querySelectorAll('[data-demo-buff]').forEach((button) => {
+      button.addEventListener('click', () => window.api.activateDemoBuff(button.dataset.demoBuff))
+    })
+    document.getElementById('demo-time-of-day').addEventListener('change', (event) => {
+      window.api.setDemoTimeOfDay(event.target.value)
+    })
+    document.getElementById('request-demo-reset').addEventListener('click', () => {
+      document.getElementById('demo-reset-confirm').classList.remove('hidden')
+    })
+    document.getElementById('cancel-demo-reset').addEventListener('click', () => {
+      document.getElementById('demo-reset-confirm').classList.add('hidden')
+    })
+    document.getElementById('confirm-demo-reset').addEventListener('click', async () => {
+      await window.api.resetDemoSave()
+      document.getElementById('demo-reset-confirm').classList.add('hidden')
+    })
     document.getElementById('expandShelf').addEventListener('click', () => window.api.performAction('expandShelf'))
     document.getElementById('proposal-accept').addEventListener('click', () => window.api.respondToLibrarianProposal(true))
     document.getElementById('proposal-decline').addEventListener('click', () => window.api.respondToLibrarianProposal(false))
@@ -563,13 +911,16 @@
 
     window.api.onGameState((state) => {
       latestGameState = state
+      bookCatalogById = Object.fromEntries(state.bookCatalog.map((tier) => [tier.id, tier]))
       animalCatalogById = Object.fromEntries(state.animalCatalog.map((animal) => [animal.id, animal]))
       document.body.dataset.time = state.timeOfDay
       document.getElementById('time-icon').textContent = timeIcons[state.timeOfDay]
       document.getElementById('ink').textContent = state.ink
-      document.getElementById('candle').textContent = `${state.candleSeconds}초`
+      document.getElementById('candle').textContent = state.candleSeconds
       document.getElementById('feather').textContent = state.feather
-      document.getElementById('books').textContent = `${state.books}권`
+      renderBookPanel(state)
+      renderShop(state)
+      renderDemoSettings(state)
       document.getElementById('stage').textContent = `${state.stageInfo.current.stage}단계 · ${state.stageInfo.current.name}`
       document.getElementById('expandShelf-label').textContent = state.stageInfo.next
         ? `${state.stageInfo.next.name}(으)로 확장`
@@ -583,15 +934,13 @@
         : '비활성'
       document.getElementById('session-time').textContent = formatSessionTime(state.session.sessionStartTime)
       document.getElementById('session-ink').textContent = state.session.sessionInk
-      document.getElementById('session-candle').textContent = `${state.session.sessionCandle}초`
+      document.getElementById('session-candle').textContent = state.session.sessionCandle
       document.getElementById('use-direct-api').checked = state.librarianUsesDirectApi
       document.getElementById('api-key-status').textContent = state.librarianUsesDirectApi
         ? '내 API 키로 직접 호출 중입니다.'
         : '중계 서버로 연결됨'
       if (document.activeElement !== document.getElementById('directive')) document.getElementById('directive').value = state.librarian.directive
       document.getElementById('directive-current').textContent = state.librarian.directive || '방침 없음'
-      setActionButton('craftBook', state.availability.craftBook)
-      document.getElementById('craftBook-cost').textContent = `잉크 ${state.availability.craftBook.cost.ink}`
       setActionButton('expandShelf', state.availability.expandShelf)
       renderVisitingAnimals(state)
       renderAnimalCatalog(state)

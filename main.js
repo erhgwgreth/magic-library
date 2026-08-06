@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron')
 const path = require('path')
 const { uIOhook, UiohookKey } = require('uiohook-napi')
-const { createSessionState } = require('./game/state')
+const { createGameState, createSessionState } = require('./game/state')
 const { actions, runAutomaticAnimalRules } = require('./game/actions')
 const {
   ANIMALS,
@@ -9,6 +9,15 @@ const {
   inviteCostText,
   grantResource,
 } = require('./game/animals')
+const { publicBookCatalog, bookCostText } = require('./game/books')
+const { BUFF_BY_ID, publicShopCatalog } = require('./game/shop')
+const {
+  NORMAL_TIMING,
+  timingFor,
+  rescaleCycleElapsed,
+  cycleElapsedForTimeOfDay,
+  applyDemoStatePatch,
+} = require('./game/demo')
 const { stageStateFor, stageCostText } = require('./game/stages')
 const { loadGame, saveGame } = require('./game/save')
 const { loadLibrarianSettings, saveLibrarianSettings } = require('./game/settings')
@@ -18,14 +27,6 @@ const { requestLibrarianDecision } = require('./game/librarian')
 const LIBRARIAN_MODEL = 'gpt-5.6-terra'
 const LIBRARIAN_REASONING_EFFORT = 'low'
 const LIBRARIAN_TRUST_FOR_PHASE_TWO = 2
-const CYCLE_MS = Number(process.env.MAGIC_LIBRARY_CYCLE_MS) > 0
-  ? Number(process.env.MAGIC_LIBRARY_CYCLE_MS)
-  : 40 * 1000
-const IS_DEMO_MODE = CYCLE_MS <= 40 * 1000
-const LIBRARIAN_INTERVAL_MS = Number(process.env.MAGIC_LIBRARY_LIBRARIAN_INTERVAL_MS) > 0
-  ? Number(process.env.MAGIC_LIBRARY_LIBRARIAN_INTERVAL_MS)
-  : IS_DEMO_MODE ? 20 * 1000 : 5 * 60 * 1000
-const LIBRARIAN_MIN_GAP_MS = IS_DEMO_MODE ? 5 * 1000 : 60 * 1000
 const LIBRARIAN_BACKOFF_MAX_MS = 30 * 60 * 1000
 const TICK_MS = 1000
 const SAVE_INTERVAL_MS = 30 * 1000
@@ -34,12 +35,15 @@ const RHYTHM_WINDOW_MS = 5 * 60 * 1000
 const MAX_NOTIFICATIONS = 5
 const MAX_REPORT_ENTRIES = 50
 const ANIMAL_CATALOG = publicAnimalCatalog()
+const BOOK_CATALOG = publicBookCatalog()
+const SHOP_CATALOG = publicShopCatalog()
 
 let mainWindow = null
 let gameFocused = true
 let gameState = null
 let sessionState = null
 let librarianSettings = { apiKey: '', useDirectApi: false }
+let demoMode = false
 let lastWorkKeyTime = 0
 let lastTickTime = 0
 let lastSaveTime = 0
@@ -47,6 +51,7 @@ let notifications = []
 let typingTimestamps = []
 let deleteTimestamps = []
 let librarianIsCalling = false
+let librarianCallToken = 0
 let lastLibrarianCallTime = 0
 let nextLibrarianCallTime = 0
 let librarianFailureCount = 0
@@ -66,7 +71,8 @@ const NON_INK_KEYS = new Set([
 ])
 
 function getTimeOfDay () {
-  const progress = (gameState.cycleElapsedMs % CYCLE_MS) / CYCLE_MS
+  const cycleMs = timingFor(demoMode).cycleMs
+  const progress = (gameState.cycleElapsedMs % cycleMs) / cycleMs
   if (progress < 0.25) return 'day'
   if (progress < 0.5) return 'afternoon'
   if (progress < 0.75) return 'sunset'
@@ -75,7 +81,13 @@ function getTimeOfDay () {
 
 function getAvailability () {
   const timeOfDay = getTimeOfDay()
-  const craftBookAvailability = actions.craftBook.canExecute(gameState, timeOfDay)
+  const craftBooks = Object.fromEntries(BOOK_CATALOG.map((tier) => [
+    tier.id,
+    {
+      ...actions.craftBook.canExecute(gameState, timeOfDay, tier.id),
+      cost: actions.craftBook.cost(gameState, tier.id),
+    },
+  ]))
   const inviteAnimals = {}
   const placeAnimals = {}
   for (const animal of ANIMALS) {
@@ -84,14 +96,29 @@ function getAvailability () {
     }
     placeAnimals[animal.id] = actions.placeAnimal.canExecute(gameState, timeOfDay, animal.id)
   }
+  const shop = {
+    alchemy: Object.fromEntries(SHOP_CATALOG.alchemy.map((item) => [
+      item.id,
+      actions.buyAlchemy.canExecute(gameState, timeOfDay, item.id),
+    ])),
+    buffs: Object.fromEntries(SHOP_CATALOG.buffs.map((item) => [
+      item.id,
+      actions.buyBuff.canExecute(gameState, timeOfDay, item.id),
+    ])),
+    upgrades: Object.fromEntries(SHOP_CATALOG.upgrades.map((item) => [
+      item.id,
+      {
+        ...actions.buyUpgrade.canExecute(gameState, timeOfDay, item.id),
+        cost: actions.buyUpgrade.cost(gameState, item.id),
+      },
+    ])),
+  }
   return {
-    craftBook: {
-      ...craftBookAvailability,
-      cost: actions.craftBook.cost(gameState),
-    },
+    craftBooks,
     expandShelf: actions.expandShelf.canExecute(gameState, timeOfDay),
     inviteAnimals,
     placeAnimals,
+    shop,
   }
 }
 
@@ -112,14 +139,15 @@ function getLibrarianAvailableActions () {
   }
 
   const craftAction = actions.craftBook
-  const craftCheck = craftAction.canExecute(gameState, timeOfDay)
+  const craftCheck = craftAction.canExecute(gameState, timeOfDay, 'basic')
   const phaseAllowsCrafting = librarianPhase() >= 2
   const trustAllowsCrafting = craftAction.requiredTrust <= gameState.librarian.trustLevel
 
   if (phaseAllowsCrafting && trustAllowsCrafting && craftCheck.ok) {
     available.push({
       id: 'craftBook',
-      description: `책 1권을 제작한다. 마법 잉크 ${craftAction.cost(gameState).ink}을 소모한다.`,
+      args: { tierId: 'basic' },
+      description: `기초 마법장서 1권을 제작한다. ${bookCostText(craftAction.cost(gameState, 'basic'))}을 소모한다.`,
     })
   } else {
     const excludedReason = !phaseAllowsCrafting
@@ -229,7 +257,18 @@ function applyAutomaticRules () {
 }
 
 function saveCurrentGame () {
-  if (gameState) saveGame(app.getPath('userData'), gameState)
+  if (!gameState) return
+  const stateToSave = demoMode
+    ? {
+        ...gameState,
+        cycleElapsedMs: rescaleCycleElapsed(
+          gameState.cycleElapsedMs,
+          timingFor(true).cycleMs,
+          NORMAL_TIMING.cycleMs,
+        ),
+      }
+    : gameState
+  saveGame(app.getPath('userData'), stateToSave)
 }
 
 function sendGameState () {
@@ -240,6 +279,10 @@ function sendGameState () {
     session: sessionState,
     availability: getAvailability(),
     stageInfo: stageStateFor(gameState.stage),
+    bookCatalog: BOOK_CATALOG,
+    shopCatalog: SHOP_CATALOG,
+    demoMode,
+    effectiveBuffDurationMs: timingFor(demoMode).buffDurationMs,
     animalCatalog: ANIMAL_CATALOG,
     notifications,
     librarianPhase: librarianPhase(),
@@ -254,7 +297,17 @@ function runAction (actionName, args = {}) {
   if (!action) return { success: false, message: '알 수 없는 행동입니다.' }
 
   const animalId = typeof args?.animalId === 'string' ? args.animalId : null
-  const result = action.execute(gameState, getTimeOfDay(), animalId)
+  const tierId = typeof args?.tierId === 'string' ? args.tierId : 'basic'
+  const shopItemId = typeof args?.itemId === 'string' ? args.itemId : null
+  const actionArgument = actionName === 'craftBook'
+    ? tierId
+    : ['buyAlchemy', 'buyBuff', 'buyUpgrade'].includes(actionName)
+      ? shopItemId
+      : animalId
+  const actionOptions = actionName === 'buyBuff'
+    ? { buffDurationMs: timingFor(demoMode).buffDurationMs }
+    : undefined
+  const result = action.execute(gameState, getTimeOfDay(), actionArgument, actionOptions)
   if (result.success) {
     addNotification(result.message)
     applyAutomaticRules()
@@ -273,7 +326,7 @@ function librarianPayload () {
       ink: gameState.ink,
       feather: gameState.feather,
       candleSeconds: gameState.candleSeconds,
-      books: gameState.books,
+      books: { ...gameState.books },
       stage: gameState.stage,
     },
     stage: {
@@ -296,7 +349,7 @@ function librarianPayload () {
 }
 
 function availabilitySignature () {
-  const craftIsPossible = actions.craftBook.canExecute(gameState, getTimeOfDay()).ok
+  const craftIsPossible = actions.craftBook.canExecute(gameState, getTimeOfDay(), 'basic').ok
   return `${getLibrarianAvailableActions().map(librarianActionSignature).join('|')}|proposal:${craftIsPossible}`
 }
 
@@ -321,7 +374,9 @@ function executeLibrarianDecision (decision) {
   if (!action || action.requiredTrust > gameState.librarian.trustLevel) return
   const canExecute = decision.action === 'inviteAnimal'
     ? action.canExecute(gameState, getTimeOfDay(), animalId)
-    : action.canExecute(gameState, getTimeOfDay())
+    : decision.action === 'craftBook'
+      ? action.canExecute(gameState, getTimeOfDay(), 'basic')
+      : action.canExecute(gameState, getTimeOfDay())
   if (!canExecute.ok) return
 
   const reason = decision.reason.trim().slice(0, 500)
@@ -329,7 +384,7 @@ function executeLibrarianDecision (decision) {
 
   if (decision.action === 'notify') {
     const proposalAction = decision.args?.proposalAction ?? null
-    const craftCheck = actions.craftBook.canExecute(gameState, getTimeOfDay())
+    const craftCheck = actions.craftBook.canExecute(gameState, getTimeOfDay(), 'basic')
     if (librarianPhase() === 1 && proposalAction === 'craftBook' && craftCheck.ok && !gameState.librarian.pendingProposal) {
       gameState.librarian.pendingProposal = { action: 'craftBook', reason, at: Date.now() }
       addLibrarianReport('notify', reason, 'proposed')
@@ -345,7 +400,9 @@ function executeLibrarianDecision (decision) {
   } else {
     const result = decision.action === 'inviteAnimal'
       ? action.execute(gameState, getTimeOfDay(), animalId)
-      : action.execute(gameState, getTimeOfDay())
+      : decision.action === 'craftBook'
+        ? action.execute(gameState, getTimeOfDay(), 'basic')
+        : action.execute(gameState, getTimeOfDay())
     if (!result.success) return
     addLibrarianReport(
       decision.action === 'inviteAnimal' ? `inviteAnimal:${animalId}` : decision.action,
@@ -360,14 +417,15 @@ function executeLibrarianDecision (decision) {
 
 async function maybeInvokeLibrarian (trigger = 'interval') {
   const now = Date.now()
-  const due = now - lastLibrarianCallTime >= LIBRARIAN_INTERVAL_MS
+  const timing = timingFor(demoMode)
+  const due = now - lastLibrarianCallTime >= timing.librarianIntervalMs
   if (librarianIsCalling) {
     return
   }
   if (now < nextLibrarianCallTime) {
     return
   }
-  if (now - lastLibrarianCallTime < LIBRARIAN_MIN_GAP_MS) {
+  if (now - lastLibrarianCallTime < timing.librarianMinGapMs) {
     return
   }
   if (!due && trigger !== 'availability') {
@@ -375,6 +433,7 @@ async function maybeInvokeLibrarian (trigger = 'interval') {
   }
 
   librarianIsCalling = true
+  const callToken = ++librarianCallToken
   lastLibrarianCallTime = now
   try {
     const payload = librarianPayload()
@@ -391,17 +450,21 @@ async function maybeInvokeLibrarian (trigger = 'interval') {
       reasoningEffort: LIBRARIAN_REASONING_EFFORT,
       payload,
     })
+    if (callToken !== librarianCallToken) return
     executeLibrarianDecision(decision)
     librarianFailureCount = 0
   } catch (error) {
+    if (callToken !== librarianCallToken) return
     console.error('[사서] 호출 오류', error)
     // API 오류는 게임 화면이나 보고서에 표시하지 않는다. 다음 시도만 천천히 늦춘다.
     librarianFailureCount += 1
-    const delay = Math.min(LIBRARIAN_MIN_GAP_MS * (2 ** librarianFailureCount), LIBRARIAN_BACKOFF_MAX_MS)
+    const delay = Math.min(timing.librarianMinGapMs * (2 ** librarianFailureCount), LIBRARIAN_BACKOFF_MAX_MS)
     nextLibrarianCallTime = Date.now() + delay
   } finally {
-    librarianIsCalling = false
-    sendGameState()
+    if (callToken === librarianCallToken) {
+      librarianIsCalling = false
+      sendGameState()
+    }
   }
 }
 
@@ -420,7 +483,9 @@ function respondToProposal (accepted) {
   }
 
   const action = actions[proposal.action]
-  const canExecute = action?.canExecute(gameState, getTimeOfDay())
+  const canExecute = proposal.action === 'craftBook'
+    ? action?.canExecute(gameState, getTimeOfDay(), 'basic')
+    : action?.canExecute(gameState, getTimeOfDay())
   if (!action || !canExecute.ok) {
     addLibrarianReport(proposal.action, proposal.reason, 'unavailable')
     addNotification('제안을 실행할 수 없어 조용히 넘겼습니다.')
@@ -429,7 +494,9 @@ function respondToProposal (accepted) {
     return { success: false, message: '현재는 제안을 실행할 수 없습니다.' }
   }
 
-  const result = action.execute(gameState, getTimeOfDay())
+  const result = proposal.action === 'craftBook'
+    ? action.execute(gameState, getTimeOfDay(), 'basic')
+    : action.execute(gameState, getTimeOfDay())
   if (!result.success) return result
   const previousPhase = librarianPhase()
   gameState.librarian.trustLevel += 1
@@ -485,6 +552,75 @@ function updateApiKey (apiKey, useDirectApi) {
   }
 }
 
+function setDemoMode (enabled) {
+  const nextDemoMode = enabled === true
+  if (nextDemoMode === demoMode) return { success: true, demoMode }
+
+  const previousTiming = timingFor(demoMode)
+  const nextTiming = timingFor(nextDemoMode)
+  gameState.cycleElapsedMs = rescaleCycleElapsed(
+    gameState.cycleElapsedMs,
+    previousTiming.cycleMs,
+    nextTiming.cycleMs,
+  )
+  demoMode = nextDemoMode
+  librarianFailureCount = 0
+  nextLibrarianCallTime = 0
+  lastLibrarianCallTime = Date.now()
+  lastActionAvailability = availabilitySignature()
+  sendGameState()
+  return { success: true, demoMode }
+}
+
+function updateDemoState (patch) {
+  if (!demoMode) return { success: false, message: '데모 모드에서만 상태를 조정할 수 있습니다.' }
+  const changed = applyDemoStatePatch(gameState, patch)
+  if (changed) saveCurrentGame()
+  sendGameState()
+  return { success: changed, message: changed ? '' : '적용할 수 있는 값이 없습니다.' }
+}
+
+function activateDemoBuff (buffId) {
+  if (!demoMode) return { success: false, message: '데모 모드에서만 버프를 활성화할 수 있습니다.' }
+  const buff = BUFF_BY_ID[buffId]
+  if (!buff) return { success: false, message: '알 수 없는 버프입니다.' }
+  gameState.shop.buffs[buffId] = Date.now() + timingFor(true).buffDurationMs
+  saveCurrentGame()
+  sendGameState()
+  return { success: true }
+}
+
+function setDemoTimeOfDay (timeOfDay) {
+  if (!demoMode) return { success: false, message: '데모 모드에서만 시간대를 조정할 수 있습니다.' }
+  const elapsedMs = cycleElapsedForTimeOfDay(timeOfDay, timingFor(true).cycleMs)
+  if (elapsedMs === null) return { success: false, message: '알 수 없는 시간대입니다.' }
+  gameState.cycleElapsedMs = elapsedMs
+  saveCurrentGame()
+  sendGameState()
+  return { success: true }
+}
+
+function resetDemoSave () {
+  if (!demoMode) return { success: false, message: '데모 모드에서만 세이브를 초기화할 수 있습니다.' }
+  gameState = createGameState()
+  sessionState = createSessionState()
+  notifications = []
+  typingTimestamps = []
+  deleteTimestamps = []
+  lastWorkKeyTime = 0
+  lastTickTime = Date.now()
+  lastSaveTime = Date.now()
+  librarianIsCalling = false
+  librarianCallToken += 1
+  librarianFailureCount = 0
+  nextLibrarianCallTime = 0
+  lastLibrarianCallTime = Date.now()
+  lastActionAvailability = availabilitySignature()
+  saveCurrentGame()
+  sendGameState()
+  return { success: true }
+}
+
 function createWindow () {
   mainWindow = new BrowserWindow({
     width: 576,
@@ -506,7 +642,7 @@ function createWindow () {
 
 app.whenReady().then(() => {
   gameState = loadGame(app.getPath('userData'))
-  gameState.cycleElapsedMs %= CYCLE_MS
+  gameState.cycleElapsedMs %= NORMAL_TIMING.cycleMs
   librarianSettings = loadLibrarianSettings(app.getPath('userData'))
   sessionState = createSessionState()
   lastTickTime = Date.now()
@@ -520,6 +656,11 @@ app.whenReady().then(() => {
   ipcMain.handle('respond-to-librarian-proposal', (_event, accepted) => respondToProposal(accepted === true))
   ipcMain.handle('update-librarian-directive', (_event, directive) => updateDirective(directive))
   ipcMain.handle('save-librarian-api-key', (_event, apiKey, useDirectApi) => updateApiKey(apiKey, useDirectApi))
+  ipcMain.handle('set-demo-mode', (_event, enabled) => setDemoMode(enabled))
+  ipcMain.handle('update-demo-state', (_event, patch) => updateDemoState(patch))
+  ipcMain.handle('activate-demo-buff', (_event, buffId) => activateDemoBuff(buffId))
+  ipcMain.handle('set-demo-time-of-day', (_event, timeOfDay) => setDemoTimeOfDay(timeOfDay))
+  ipcMain.handle('reset-demo-save', () => resetDemoSave())
   ipcMain.handle('mark-librarian-report-read', () => markLibrarianReportAsRead())
   ipcMain.handle('clear-read-librarian-report', () => clearReadLibrarianReport())
 
@@ -544,7 +685,8 @@ app.whenReady().then(() => {
     const stillWorking = now - lastWorkKeyTime <= GRACE_MS
 
     // 시간은 창 포커스와 무관하게 흐르고, 자원 기록만 외부 작업 중일 때 한다.
-    gameState.cycleElapsedMs = (gameState.cycleElapsedMs + elapsed) % CYCLE_MS
+    const cycleMs = timingFor(demoMode).cycleMs
+    gameState.cycleElapsedMs = (gameState.cycleElapsedMs + elapsed) % cycleMs
     if (!gameFocused && stillWorking) {
       sessionState.sessionCandle += grantResource(gameState, 'candleSeconds', 1)
     }

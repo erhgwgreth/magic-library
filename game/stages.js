@@ -1,32 +1,39 @@
+const { bookCostText } = require('./books')
+
 const STAGES = [
   {
     stage: 1,
     name: '작은 서가',
     background: 'assets/backgrounds/stage1.png',
+    gainMultiplier: 1.0,
   },
   {
     stage: 2,
     name: '열람실',
     background: 'assets/backgrounds/stage2.png',
-    expandCost: { books: 5, ink: 1000 },
+    gainMultiplier: 1.2,
+    expandCost: { books: { basic: 5 }, ink: 1000 },
   },
   {
     stage: 3,
     name: '달빛 서재',
     background: 'assets/backgrounds/stage3.png',
-    expandCost: { books: 15, ink: 2000, candleSeconds: 1000 },
+    gainMultiplier: 1.5,
+    expandCost: { books: { basic: 10, intermediate: 3 }, ink: 2000, feather: 100 },
   },
   {
     stage: 4,
     name: '별빛 서고',
     background: 'assets/backgrounds/stage4.png',
-    expandCost: { books: 30, ink: 3000, candleSeconds: 1500, feather: 100 },
+    gainMultiplier: 2.0,
+    expandCost: { books: { intermediate: 10, advanced: 3 }, ink: 3000, feather: 200, candleSeconds: 500 },
   },
   {
     stage: 5,
     name: '대도서관',
     background: 'assets/backgrounds/stage5.png',
-    expandCost: { books: 50, ink: 4000, candleSeconds: 2500, feather: 200, trustLevel: 3 },
+    gainMultiplier: 3.0,
+    expandCost: { books: { advanced: 10, mythic: 1 }, ink: 4000, feather: 300, candleSeconds: 1000, trustLevel: 3 },
   },
 ]
 
@@ -48,7 +55,13 @@ function publicStage (stage) {
     stage: stage.stage,
     name: stage.name,
     background: stage.background,
-    expandCost: stage.expandCost ? { ...stage.expandCost } : null,
+    gainMultiplier: stage.gainMultiplier,
+    expandCost: stage.expandCost
+      ? {
+          ...stage.expandCost,
+          ...(stage.expandCost.books ? { books: { ...stage.expandCost.books } } : {}),
+        }
+      : null,
   }
 }
 
@@ -61,20 +74,7 @@ function stageStateFor (stageNumber) {
 }
 
 function stageCostText (cost) {
-  if (!cost) return ''
-  const labels = {
-    books: ['책', '권'],
-    ink: ['마법 잉크', ''],
-    candleSeconds: ['고요한 촛불', '초'],
-    feather: ['교정 깃털', ''],
-    trustLevel: ['사서 신뢰', ''],
-  }
-  return Object.entries(cost)
-    .map(([resource, amount]) => {
-      const [label, unit] = labels[resource] || [resource, '']
-      return `${label} ${amount}${unit}`
-    })
-    .join(', ')
+  return bookCostText(cost)
 }
 
 module.exports = {

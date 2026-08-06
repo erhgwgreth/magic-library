@@ -2,12 +2,17 @@ const {
   ANIMALS,
   ANIMAL_BY_ID,
   RESOURCE_NAMES,
-  getBookInkCost,
+  getBasicBookInkCost,
 } = require('./animals')
+const { BOOK_BY_ID, cloneBookCost, bookAmountText } = require('./books')
 const { nextStage } = require('./stages')
-
-// 조정할 수 있는 게임 수치는 동물·단계 데이터 파일에 모아 둔다.
-const CRAFT_BOOK_INK_COST = 100
+const {
+  ALCHEMY_BY_ID,
+  BUFF_BY_ID,
+  UPGRADE_BY_ID,
+  ensureShopState,
+  upgradeCost,
+} = require('./shop')
 
 function fail (reason) {
   return { ok: false, reason }
@@ -17,8 +22,12 @@ function succeed () {
   return { ok: true, reason: '' }
 }
 
-function bookCost (state) {
-  return getBookInkCost(state, CRAFT_BOOK_INK_COST)
+function craftBookCost (state, tierId = 'basic') {
+  const tier = BOOK_BY_ID[tierId]
+  if (!tier) return null
+  const cost = cloneBookCost(tier.cost)
+  if (tierId === 'basic') cost.ink = getBasicBookInkCost(state, cost.ink)
+  return cost
 }
 
 function animalForInvite (animalId) {
@@ -26,12 +35,43 @@ function animalForInvite (animalId) {
   return animal?.type === 'normal' ? animal : null
 }
 
-function expansionRequirementMessage (resource, amount) {
-  if (resource === 'books') return `책 ${amount}권이 필요합니다.`
+function resourceRequirementMessage (resource, amount) {
   if (resource === 'ink') return `마법 잉크가 ${amount} 필요합니다.`
-  if (resource === 'candleSeconds') return `고요한 촛불이 ${amount}초 필요합니다.`
+  if (resource === 'candleSeconds') return `고요한 촛불이 ${amount} 필요합니다.`
   if (resource === 'feather') return `교정 깃털이 ${amount} 필요합니다.`
   return `${RESOURCE_NAMES[resource] || resource} ${amount} 필요합니다.`
+}
+
+function checkCost (state, cost) {
+  for (const [resource, amount] of Object.entries(cost || {})) {
+    if (resource === 'books') {
+      for (const [bookId, bookAmount] of Object.entries(amount || {})) {
+        if ((state.books[bookId] ?? 0) < bookAmount) {
+          return fail(`${bookAmountText(bookId, bookAmount)}이 필요합니다.`)
+        }
+      }
+      continue
+    }
+    if (resource === 'trustLevel') {
+      if (state.librarian.trustLevel < amount) return fail(`사서와의 신뢰 단계 ${amount} 이상이 필요합니다.`)
+      continue
+    }
+    if ((state[resource] ?? 0) < amount) return fail(resourceRequirementMessage(resource, amount))
+  }
+  return succeed()
+}
+
+function spendCost (state, cost) {
+  for (const [resource, amount] of Object.entries(cost || {})) {
+    if (resource === 'trustLevel') continue
+    if (resource === 'books') {
+      for (const [bookId, bookAmount] of Object.entries(amount || {})) {
+        state.books[bookId] -= bookAmount
+      }
+      continue
+    }
+    state[resource] -= amount
+  }
 }
 
 function inviteAnimalCheck (state, timeOfDay, animalId) {
@@ -59,16 +99,19 @@ const actions = {
   craftBook: {
     id: 'craftBook',
     requiredTrust: 2,
-    cost: (state) => ({ ink: bookCost(state) }),
-    canExecute: (state) => state.ink >= bookCost(state)
-      ? succeed()
-      : fail(`마법 잉크가 ${bookCost(state)} 필요합니다.`),
-    execute: (state) => {
-      const check = actions.craftBook.canExecute(state)
+    cost: craftBookCost,
+    canExecute: (state, _timeOfDay, tierId = 'basic') => {
+      const cost = craftBookCost(state, tierId)
+      if (!cost) return fail('알 수 없는 장서입니다.')
+      return checkCost(state, cost)
+    },
+    execute: (state, timeOfDay, tierId = 'basic') => {
+      const check = actions.craftBook.canExecute(state, timeOfDay, tierId)
       if (!check.ok) return { success: false, message: check.reason }
-      state.ink -= bookCost(state)
-      state.books += 1
-      return { success: true, message: '새 책 한 권을 만들었습니다.' }
+      const tier = BOOK_BY_ID[tierId]
+      spendCost(state, craftBookCost(state, tierId))
+      state.books[tierId] += 1
+      return { success: true, message: `${tier.name} 한 권을 만들었습니다.` }
     },
   },
   expandShelf: {
@@ -77,24 +120,14 @@ const actions = {
     canExecute: (state) => {
       const next = nextStage(state.stage)
       if (!next) return fail('이미 최고 단계입니다.')
-      for (const [resource, amount] of Object.entries(next.expandCost)) {
-        if (resource === 'trustLevel') {
-          if (state.librarian.trustLevel < amount) {
-            return fail(`사서와의 신뢰 단계 ${amount} 이상이 필요합니다.`)
-          }
-          continue
-        }
-        if ((state[resource] ?? 0) < amount) return fail(expansionRequirementMessage(resource, amount))
-      }
-      return succeed()
+      return checkCost(state, next.expandCost)
     },
     execute: (state) => {
       const check = actions.expandShelf.canExecute(state)
       if (!check.ok) return { success: false, message: check.reason }
       const next = nextStage(state.stage)
-      for (const [resource, amount] of Object.entries(next.expandCost)) {
-        if (resource !== 'trustLevel') state[resource] -= amount
-      }
+      // 확장 자원과 등급별 장서는 소모하고, 신뢰 단계는 조건으로만 확인한다.
+      spendCost(state, next.expandCost)
       state.stage = next.stage
       return { success: true, message: `${next.name}(으)로 확장했습니다.` }
     },
@@ -141,6 +174,76 @@ const actions = {
           ? `${ANIMAL_BY_ID[animalId].name} 배치를 완료했습니다.`
           : `${ANIMAL_BY_ID[animalId].name} 배치를 해제했습니다.`,
       }
+    },
+  },
+  buyAlchemy: {
+    id: 'buyAlchemy',
+    requiredTrust: 0,
+    availableToLibrarian: false,
+    cost: (_state, itemId) => ALCHEMY_BY_ID[itemId]?.from || null,
+    canExecute: (state, _timeOfDay, itemId) => {
+      const item = ALCHEMY_BY_ID[itemId]
+      if (!item) return fail('알 수 없는 연금술입니다.')
+      return checkCost(state, item.from)
+    },
+    execute: (state, timeOfDay, itemId) => {
+      const check = actions.buyAlchemy.canExecute(state, timeOfDay, itemId)
+      if (!check.ok) return { success: false, message: check.reason }
+      const item = ALCHEMY_BY_ID[itemId]
+      spendCost(state, item.from)
+      for (const [resource, amount] of Object.entries(item.to)) state[resource] += amount
+      return { success: true, message: `${item.name}을 완료했습니다.` }
+    },
+  },
+  buyBuff: {
+    id: 'buyBuff',
+    requiredTrust: 0,
+    availableToLibrarian: false,
+    cost: (_state, itemId) => {
+      const item = BUFF_BY_ID[itemId]
+      return item ? cloneBookCost(item.cost) : null
+    },
+    canExecute: (state, _timeOfDay, itemId) => {
+      const item = BUFF_BY_ID[itemId]
+      if (!item) return fail('알 수 없는 버프입니다.')
+      return checkCost(state, item.cost)
+    },
+    execute: (state, timeOfDay, itemId, options = {}) => {
+      const check = actions.buyBuff.canExecute(state, timeOfDay, itemId)
+      if (!check.ok) return { success: false, message: check.reason }
+      const item = BUFF_BY_ID[itemId]
+      spendCost(state, item.cost)
+      const shop = ensureShopState(state)
+      const now = Date.now()
+      const currentExpiry = Number.isFinite(shop.buffs[itemId]) ? shop.buffs[itemId] : 0
+      const wasActive = currentExpiry > now
+      const durationMs = Number.isFinite(options.buffDurationMs) && options.buffDurationMs > 0
+        ? options.buffDurationMs
+        : item.durationMs
+      shop.buffs[itemId] = Math.max(now, currentExpiry) + durationMs
+      return {
+        success: true,
+        message: wasActive ? `${item.name} 효과가 연장되었습니다.` : `${item.name} 효과가 활성화되었습니다.`,
+      }
+    },
+  },
+  buyUpgrade: {
+    id: 'buyUpgrade',
+    requiredTrust: 0,
+    availableToLibrarian: false,
+    cost: (state, itemId) => upgradeCost(state, itemId),
+    canExecute: (state, _timeOfDay, itemId) => {
+      if (!UPGRADE_BY_ID[itemId]) return fail('알 수 없는 영구 강화입니다.')
+      return checkCost(state, upgradeCost(state, itemId))
+    },
+    execute: (state, timeOfDay, itemId) => {
+      const check = actions.buyUpgrade.canExecute(state, timeOfDay, itemId)
+      if (!check.ok) return { success: false, message: check.reason }
+      const upgrade = UPGRADE_BY_ID[itemId]
+      spendCost(state, upgradeCost(state, itemId))
+      const shop = ensureShopState(state)
+      shop.upgrades[itemId] += 1
+      return { success: true, message: `${upgrade.name}이(가) ${shop.upgrades[itemId]}레벨이 되었습니다.` }
     },
   },
   wait: {

@@ -1,12 +1,14 @@
 const MAX_REPORT_ENTRIES = 50
 const { ANIMALS, createAnimalStates } = require('./animals')
+const { createBookInventory, normalizeBookInventory } = require('./books')
+const { createShopState, normalizeShopState } = require('./shop')
 const { STAGE_BY_NUMBER } = require('./stages')
 
 const DEFAULT_GAME_STATE = {
   ink: 0,
   feather: 0,
   candleSeconds: 0,
-  books: 0,
+  books: createBookInventory(),
   stage: 1,
   cycleElapsedMs: 0,
   animals: createAnimalStates(),
@@ -15,6 +17,7 @@ const DEFAULT_GAME_STATE = {
     candleSeconds: 0,
     feather: 0,
   },
+  shop: createShopState(),
   librarian: {
     trustLevel: 1,
     approvalCount: 0,
@@ -55,17 +58,18 @@ function applySavedState (saved) {
   const state = createGameState()
   if (!saved || typeof saved !== 'object') return state
 
-  for (const key of ['ink', 'feather', 'candleSeconds', 'books', 'cycleElapsedMs']) {
+  for (const key of ['ink', 'feather', 'candleSeconds', 'cycleElapsedMs']) {
     if (Number.isFinite(saved[key]) && saved[key] >= 0) state[key] = saved[key]
   }
+  state.books = normalizeBookInventory(saved.books)
+  state.shop = normalizeShopState(saved.shop)
   if (STAGE_BY_NUMBER[saved.stage]) state.stage = saved.stage
 
   for (const definition of ANIMALS) {
     const savedAnimal = saved.animals?.[definition.id]
     if (!savedAnimal || typeof savedAnimal !== 'object') continue
-    const allowedStatuses = definition.type === 'legendary'
-      ? ['unknown', 'collected']
-      : ['unknown', 'discovered', 'invited', 'collected']
+    // 데모 조정 상태도 저장될 수 있도록 모든 동물에 같은 상태 집합을 허용한다.
+    const allowedStatuses = ['unknown', 'discovered', 'invited', 'collected']
     if (!allowedStatuses.includes(savedAnimal.status)) continue
     state.animals[definition.id].status = savedAnimal.status
     state.animals[definition.id].visits = Number.isFinite(savedAnimal.visits) && savedAnimal.visits >= 0
