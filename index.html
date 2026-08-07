@@ -85,6 +85,7 @@
     label { display: block; margin-top: 10px; font-size: 11px; opacity: .76; }
     input { width: 100%; margin-top: 4px; padding: 7px; border: 1px solid #5b4a76; border-radius: 5px; color: inherit; background: #29243a; font: inherit; }
     input[type="checkbox"] { width: auto; margin: 0 4px 0 0; padding: 0; }
+    input[type="range"] { padding: 0; border: 0; accent-color: #8f76aa; }
     .controls { display: flex; gap: 6px; margin-top: 6px; }
     .controls button { flex: 1; padding: 7px; text-align: center; }
     details { margin-top: 12px; }
@@ -96,6 +97,8 @@
     .demo-actions button { padding: 7px; text-align: center; }
     .reset-confirm { margin-top: 7px; padding: 8px; border-radius: 6px; background: rgba(133, 60, 60, .24); }
     .reset-confirm p { margin: 0 0 7px; }
+    .volume-label { display: flex; justify-content: space-between; gap: 8px; }
+    .quit-controls { margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.09); }
     .nav { position: fixed; z-index: 6; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; padding: 7px 8px 8px; background: rgba(14, 13, 22, .78); backdrop-filter: blur(5px); }
     .nav button { min-height: 55px; padding: 4px 2px; background: transparent; font-size: 10px; text-align: center; }
     .nav button.active { background: rgba(119, 91, 148, .48); }
@@ -130,6 +133,7 @@
   </style>
 </head>
 <body data-time="day">
+  <audio id="bgm" src="assets/bgm.mp3" loop preload="auto"></audio>
   <header class="hud">
     <span id="time-icon" class="time" aria-label="시간대">☀</span>
     <span class="resource">잉크 <b id="ink">0</b></span>
@@ -209,6 +213,8 @@
 
   <section id="settings-panel" class="panel settings-panel hidden" aria-label="설정">
     <h2>설정</h2>
+    <label class="volume-label" for="bgm-volume"><span>배경음악</span><span id="bgm-volume-value">30%</span></label>
+    <input id="bgm-volume" type="range" min="0" max="100" step="1" value="30" />
     <label><input id="demo-mode" type="checkbox" /> 데모 모드</label>
     <div id="demo-controls" class="demo-panel hidden">
       <h3>자원</h3>
@@ -284,6 +290,7 @@
       <input id="api-key" type="password" autocomplete="off" placeholder="비워 두면 중계 서버를 사용합니다" />
       <div class="controls"><button id="save-api-key" type="button">호출 설정 저장</button></div>
     </details>
+    <div class="controls quit-controls"><button id="quit-game" type="button">게임 종료</button></div>
   </section>
 
   <nav class="nav" aria-label="기능 메뉴">
@@ -317,9 +324,15 @@
     let activeBackgroundStage = null
     let backgroundRequestId = 0
     let demoNumberDraftVersion = 0
+    let bgmSaveTimer = null
+    let pendingBgmVolume = null
+    let bgmPlaybackStarted = false
+    let bgmAutoPlayAttempted = false
     const demoNumberDrafts = new Map()
     const loadedAnimalImages = new Set()
     const unavailableAnimalImages = new Set()
+    const bgm = document.getElementById('bgm')
+    const bgmVolumeInput = document.getElementById('bgm-volume')
     const demoNumberFields = {
       'demo-ink': {
         value: (state) => state.ink,
@@ -389,6 +402,63 @@
       document.getElementById('librarian-bubble').classList.toggle('hidden', !open)
       document.getElementById('librarian-toggle').setAttribute('aria-expanded', String(open))
       if (open) setLibrarianUnread(false)
+    }
+    function applyBgmVolume (volume) {
+      const normalized = Math.min(1, Math.max(0, Number.isFinite(volume) ? volume : 0.3))
+      bgm.volume = normalized
+      bgm.muted = normalized === 0
+      bgmVolumeInput.value = String(Math.round(normalized * 100))
+      document.getElementById('bgm-volume-value').textContent = `${Math.round(normalized * 100)}%`
+    }
+    function disarmBgmPlaybackFallback () {
+      document.removeEventListener('pointerdown', handleBgmPlaybackFallback)
+      document.removeEventListener('keydown', handleBgmPlaybackFallback)
+    }
+    async function tryStartBgmPlayback () {
+      if (bgmPlaybackStarted) return
+      if (bgm.error) {
+        disarmBgmPlaybackFallback()
+        return
+      }
+      try {
+        await bgm.play()
+        bgmPlaybackStarted = !bgm.paused
+        if (bgmPlaybackStarted) disarmBgmPlaybackFallback()
+      } catch {
+        // 자동재생이 막히거나 파일이 없어도 게임은 조용히 계속한다.
+      }
+    }
+    function handleBgmPlaybackFallback () {
+      disarmBgmPlaybackFallback()
+      void tryStartBgmPlayback()
+    }
+    function renderBgmSettings (state) {
+      if (pendingBgmVolume === null) applyBgmVolume(state.settings?.bgmVolume)
+      if (!bgmAutoPlayAttempted) {
+        bgmAutoPlayAttempted = true
+        void tryStartBgmPlayback()
+      }
+    }
+    async function persistBgmVolume () {
+      clearTimeout(bgmSaveTimer)
+      bgmSaveTimer = null
+      if (pendingBgmVolume === null) return
+      const volume = pendingBgmVolume
+      let saved = false
+      try {
+        const result = await window.api.setBgmVolume(volume)
+        saved = result?.success === true
+      } catch {
+        // 창이 닫히는 중이어도 오디오 오류가 게임을 방해하지 않게 한다.
+      } finally {
+        if (pendingBgmVolume === volume) pendingBgmVolume = null
+      }
+      if (!saved && latestGameState) applyBgmVolume(latestGameState.settings?.bgmVolume)
+    }
+    function queueBgmVolumeSave (volume) {
+      pendingBgmVolume = volume
+      clearTimeout(bgmSaveTimer)
+      bgmSaveTimer = setTimeout(() => { void persistBgmVolume() }, 150)
     }
     function formatStageCost (cost) {
       const parts = []
@@ -916,6 +986,15 @@
       setLibrarianBubbleOpen(!librarianBubbleOpen)
     })
     document.getElementById('settings-toggle').addEventListener('click', () => setSettingsOpen(!settingsOpen))
+    bgmVolumeInput.addEventListener('input', () => {
+      const volume = Number(bgmVolumeInput.value) / 100
+      applyBgmVolume(volume)
+      queueBgmVolumeSave(volume)
+    })
+    bgmVolumeInput.addEventListener('change', () => { void persistBgmVolume() })
+    bgm.addEventListener('error', disarmBgmPlaybackFallback, { once: true })
+    document.addEventListener('pointerdown', handleBgmPlaybackFallback)
+    document.addEventListener('keydown', handleBgmPlaybackFallback)
     document.getElementById('demo-mode').addEventListener('change', (event) => window.api.setDemoMode(event.target.checked))
     for (const id of Object.keys(demoNumberFields)) {
       const input = document.getElementById(id)
@@ -963,6 +1042,11 @@
       )
       document.getElementById('api-key').value = ''
     })
+    document.getElementById('quit-game').addEventListener('click', async (event) => {
+      event.currentTarget.disabled = true
+      await persistBgmVolume()
+      void window.api.quitGame().catch(() => {})
+    })
     document.querySelectorAll('.nav button').forEach((button) => button.addEventListener('click', () => openPanel(button.dataset.panel)))
     window.addEventListener('resize', () => {
       if (latestGameState) renderVisitingAnimals(latestGameState)
@@ -980,6 +1064,7 @@
       renderBookPanel(state)
       renderShop(state)
       renderDemoSettings(state)
+      renderBgmSettings(state)
       document.getElementById('stage').textContent = `${state.stageInfo.current.stage}단계 · ${state.stageInfo.current.name}`
       document.getElementById('expandShelf-label').textContent = state.stageInfo.next
         ? `${state.stageInfo.next.name}(으)로 확장`

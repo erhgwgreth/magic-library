@@ -29,6 +29,7 @@ const { stageStateFor, stageCostText } = require('./game/stages')
 const { loadGame, saveGame } = require('./game/save')
 const { loadLibrarianSettings, saveLibrarianSettings } = require('./game/settings')
 const { requestLibrarianDecision } = require('./game/librarian')
+const { setBgmVolume } = require('./game/audio')
 const {
   TRUST_PROGRESS_PROPOSAL_ACCEPT,
   TRUST_PROGRESS_CRAFT_BOOK,
@@ -832,6 +833,20 @@ function updateApiKey (apiKey, useDirectApi) {
   }
 }
 
+function updateBgmVolume (volume) {
+  if (!Number.isFinite(volume)) return { success: false, message: '올바르지 않은 볼륨입니다.' }
+  const changed = setBgmVolume(gameState, volume)
+  if (changed) saveCurrentGame()
+  sendGameState()
+  return { success: true, volume: gameState.settings.bgmVolume }
+}
+
+function quitGame () {
+  saveCurrentGame()
+  app.quit()
+  return { success: true }
+}
+
 function setDemoMode (enabled) {
   const nextDemoMode = enabled === true
   if (nextDemoMode === demoMode) return { success: true, demoMode }
@@ -941,6 +956,8 @@ app.whenReady().then(() => {
   ipcMain.handle('activate-demo-buff', (_event, buffId) => activateDemoBuff(buffId))
   ipcMain.handle('set-demo-time-of-day', (_event, timeOfDay) => setDemoTimeOfDay(timeOfDay))
   ipcMain.handle('reset-demo-save', () => resetDemoSave())
+  ipcMain.handle('set-bgm-volume', (_event, volume) => updateBgmVolume(volume))
+  ipcMain.handle('quit-game', () => quitGame())
   ipcMain.handle('mark-librarian-report-read', () => markLibrarianReportAsRead())
   ipcMain.handle('clear-read-librarian-report', () => clearReadLibrarianReport())
 

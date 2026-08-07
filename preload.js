@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('api', {
   activateDemoBuff: (buffId) => ipcRenderer.invoke('activate-demo-buff', buffId),
   setDemoTimeOfDay: (timeOfDay) => ipcRenderer.invoke('set-demo-time-of-day', timeOfDay),
   resetDemoSave: () => ipcRenderer.invoke('reset-demo-save'),
+  setBgmVolume: (volume) => ipcRenderer.invoke('set-bgm-volume', volume),
+  quitGame: () => ipcRenderer.invoke('quit-game'),
   markLibrarianReportRead: () => ipcRenderer.invoke('mark-librarian-report-read'),
   clearReadLibrarianReport: () => ipcRenderer.invoke('clear-read-librarian-report'),
 })

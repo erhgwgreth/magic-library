@@ -9,6 +9,7 @@ const {
   setLibrarianApprovalCount,
   setLibrarianTrustLevel,
 } = require('./trust')
+const { DEFAULT_BGM_VOLUME, normalizeBgmVolume } = require('./audio')
 
 const DEFAULT_GAME_STATE = {
   ink: 0,
@@ -22,6 +23,9 @@ const DEFAULT_GAME_STATE = {
     ink: 0,
     candleSeconds: 0,
     feather: 0,
+  },
+  settings: {
+    bgmVolume: DEFAULT_BGM_VOLUME,
   },
   shop: createShopState(),
   librarian: {
@@ -71,6 +75,7 @@ function applySavedState (saved) {
   }
   state.books = normalizeBookInventory(saved.books)
   state.shop = normalizeShopState(saved.shop)
+  state.settings.bgmVolume = normalizeBgmVolume(saved.settings?.bgmVolume)
   if (STAGE_BY_NUMBER[saved.stage]) state.stage = saved.stage
 
   for (const definition of ANIMALS) {
