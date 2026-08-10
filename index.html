@@ -414,6 +414,11 @@
       document.removeEventListener('pointerdown', handleBgmPlaybackFallback)
       document.removeEventListener('keydown', handleBgmPlaybackFallback)
     }
+    function armBgmPlaybackFallback () {
+      if (bgm.error) return
+      document.addEventListener('pointerdown', handleBgmPlaybackFallback)
+      document.addEventListener('keydown', handleBgmPlaybackFallback)
+    }
     async function tryStartBgmPlayback () {
       if (bgmPlaybackStarted) return
       if (bgm.error) {
@@ -425,6 +430,7 @@
         bgmPlaybackStarted = !bgm.paused
         if (bgmPlaybackStarted) disarmBgmPlaybackFallback()
       } catch {
+        armBgmPlaybackFallback()
         // 자동재생이 막히거나 파일이 없어도 게임은 조용히 계속한다.
       }
     }
@@ -993,8 +999,7 @@
     })
     bgmVolumeInput.addEventListener('change', () => { void persistBgmVolume() })
     bgm.addEventListener('error', disarmBgmPlaybackFallback, { once: true })
-    document.addEventListener('pointerdown', handleBgmPlaybackFallback)
-    document.addEventListener('keydown', handleBgmPlaybackFallback)
+    armBgmPlaybackFallback()
     document.getElementById('demo-mode').addEventListener('change', (event) => window.api.setDemoMode(event.target.checked))
     for (const id of Object.keys(demoNumberFields)) {
       const input = document.getElementById(id)

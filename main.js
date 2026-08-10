@@ -921,7 +921,6 @@ function createWindow () {
     width: 576,
     height: 1024,
     center: true,
-    alwaysOnTop: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
